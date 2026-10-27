@@ -32,7 +32,7 @@ This is where xref:pipeline/pipelines.adoc[pipelines] and xref:workflow/workflow
 The project tree on the left shows the files in your project.
 Files you open appear as tabs in the editor area next to the tree.
 This perspective contains handlers for the most common file types known to Hop.
-These are obviously hwf (workflows) and hpl (pipelines), but also JSON, CSV, TXT, XML, Markdown, SVG, Log and SAS 7 BDAT files.
+These are obviously hwf (workflows) and hpl (pipelines), but also many text and document formats, listed in <<file-types>>.
 The File Explorer perspective is also where you'll manage version control for your projects through xref:hop-gui/hop-gui-git.adoc[Git integration].
 
 NOTE: Older Hop versions had a separate Data Orchestration perspective for editing pipelines and workflows. It has been merged into the File Explorer perspective.
@@ -51,6 +51,67 @@ An optional Spoon-style palette tree of transforms or actions can be shown on th
 For more information on how to get started with pipelines, see the xref:getting-started/hop-gui-pipelines.adoc[Pipelines getting started guide].
 
 For more information on how to get started with workflows, see the xref:getting-started/hop-gui-workflows.adoc[Workflows getting started guide].
+
+[[file-types]]
+== File types
+
+Besides pipelines (hpl) and workflows (hwf), the File Explorer has handlers for these file types:
+
+[options="header",cols="2,2,5"]
+|===
+|Type |Files |Notes
+
+|JSON |`*.json` |Has a <<pretty-print-json,Pretty-print JSON>> button.
+|CSV |`*.csv` |
+|Text |`*.txt` |
+|Text files without an extension |`config`, `.gitignore`, `.profile`, `.bashrc`, `.gitconfig`, `Dockerfile`, `Jenkinsfile`, `README`, `READ.me` |Matched by file name.
+|XML |`*.xml` |
+|YAML |`*.yml`, `*.yaml` |
+|SQL |`*.sql` |
+|Markdown |`*.md` |Has a <<markdown-preview,preview>>.
+|Shell script |`*.sh` |
+|Windows batch and command files |`*.bat`, `*.cmd` |
+|Python |`*.py` |
+|HTML |`*.html`, `*.htm` |Shown rendered, not as text.
+|PDF |`*.pdf` |Shown rendered, not as text.
+|SVG |`*.svg` |
+|Log |`*.log` |
+|SAS 7 BDAT |`*.sas7bdat` |
+|Excel |`*.xls`, `*.xlsx` |
+|Parquet |`*.parquet`, `*.parq` |
+|Archive |`*.zip`, `*.7z`, `*.gz`, `*.rar` |
+|===
+
+To see any other file, or one of these as plain text, use *Open as text* in the <<right-click-menu,right-click menu>>.
+
+[[text-editor]]
+== Editing text files
+
+The editor of the text based file types has the usual editing options, including undo and redo, cut, copy and paste, and select all.
+
+=== Find and replace
+
+* Find, `Ctrl+F` (`Cmd+F` on macOS): Search for text in the file.
+* Find/Replace, `Ctrl+H` (`Cmd+H` on macOS): Search for text and replace it.
+
+Both are in the right-click menu of the editor.
+They are also in the text editor toolbar, which is shown when the option *Show text editor toolbar* is enabled in the xref:hop-gui/perspective-configuration.adoc[Configuration perspective].
+
+[[pretty-print-json]]
+=== Pretty-print JSON
+
+The toolbar of a JSON file has a *Pretty-print JSON* button.
+It formats the text of the editor.
+When the text is not valid JSON, it shows the error *JSON format error* instead and leaves the text as it is.
+
+[[markdown-preview]]
+=== Markdown preview
+
+The toolbar of a Markdown file has a button *Show the rendered version of this Markdown file in a preview tab*.
+It opens a tab called `<file> (preview)` with the rendered file.
+Pressing the button again refreshes that tab and selects it.
+While the preview tab is open, it also follows the editor: it is rendered again a moment after you stop typing.
+The preview tab closes together with the tab of the Markdown file.
 
 == File operations
 
@@ -76,7 +137,7 @@ New pipelines, workflows and files are created from the right-click menu rather 
 Right-click a file or folder in the tree to open this menu.
 Options that don't apply to the selection are greyed out.
 
-* Create pipeline..., Create workflow..., Create file...: Create a new, empty pipeline, workflow or file inside the selected folder and open it. For a file you choose its name and file type. Only available when one folder is selected.
+* Create pipeline..., Create workflow..., Create file...: Create a new empty pipeline, a new workflow with a Start action, or a new file inside the selected folder and open it. For a file you choose its name and file type. Only available when one folder is selected.
 * Create folder: Create a new folder inside the selected folder. Only available when one folder is selected.
 * Expand All, Collapse All: Show or hide all nested folders in the tree.
 * Refresh folder: Read the selected folder, or the folder of the selected file, again from disk.
@@ -138,11 +199,13 @@ See xref:hop-gui/hop-gui-git.adoc[Working with git] for all the git options in H
 
 The "Git Info" icon in the toolbar will be enabled if there is information regarding the file or folder that is selected.  If you click on it, you'll be able to see all sorts of information regarding the git history in a new tab:
 
-image::hop-gui/perspective-explorer-git-info-panel.png[Git information shown in a tab]
+image::hop-gui/perspective-explorer-git-info-panel.png[Git information shown in a tab,width=1176]
 
-Below the revision history you can see the revisions of a file.  If you select a revision you'll be able to not only see the text differences between two revisions but also use the "Visual diff" button on the right-hand side of the tab.  If you select the "visual diff" option 2 new tabs will be opened with the pipeline or workflow state before and after the change.
+Select a revision to list the files it changed under *Changed files*.
+Select a file to see its changes as text on the right.
+For a pipeline or workflow, the *Visual diff* button opens 2 new tabs with the pipeline or workflow before and after the selected revision.
 
-image::hop-gui/perspective-explorer-git-visual-diff-example.png[Git visual diff example]
+image::hop-gui/perspective-explorer-git-visual-diff-example.png[Git visual diff example,width=760]
 
 Small information icons will be added to the various transforms, actions and hops to indicate if they were changed, deleted or added.
 

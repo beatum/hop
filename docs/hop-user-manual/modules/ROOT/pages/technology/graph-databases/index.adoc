@@ -153,10 +153,10 @@ And for relationships:
 * Memgraph: `CALL vector_search.search_edges('index', 5, $q) YIELD edge, distance`
 * FalkorDB: `CALL db.idx.vector.queryRelationships('TYPE', 'property', 5, vecf32($q)) YIELD relationship, score`, again with a distance.
 
-== Upgrading from Hop 2.20 or earlier
+== Upgrading from Hop 2.19 or earlier
 
 The graph functionality of Hop used to be Neo4j specific.
-From Hop 2.21 on it works with every graph database above. Existing projects keep working without changes:
+From Hop 2.20 on it works with every graph database above. Existing projects keep working without changes:
 
 * Neo4j connections keep working. You can convert them to graph database connections, see xref:metadata-types/graphs/graph-database-connection.adoc#_converting_a_neo4j_connection[Converting a Neo4j connection].
 * The transforms and actions have vendor neutral names, icons and the category *Graph*. Their plugin IDs didn't change, so pipelines and workflows open as before:
@@ -179,7 +179,7 @@ From Hop 2.21 on it works with every graph database above. Existing projects kee
 |Neo4j location |Graph database location
 |===
 * `HOP_GRAPH_LOGGING_CONNECTION` replaces `NEO4J_LOGGING_CONNECTION`, which keeps working when the new variable isn't set.
-* The Cypher builder writes parameters as `$name`. It wrote them as `{name}`, which Neo4j 4 and later reject, so statements without UNWIND work again.
+* The Cypher builder writes parameters as `$name`. It wrote them as `+{name}+`, which Neo4j 4 and later reject, so statements without UNWIND work again.
 * Get graph logging info finds the previous executions of pipelines and workflows: it looked for execution types which the logging doesn't write.
 The workflow logging now writes the status of a workflow, which these lookups need.
 * The graph index, graph constraint, graph script and check connections actions report their own success, also after a failure hop.
