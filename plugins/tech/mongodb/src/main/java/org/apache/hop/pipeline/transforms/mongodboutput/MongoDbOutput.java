@@ -47,6 +47,7 @@ import org.bson.Document;
  */
 public class MongoDbOutput extends BaseTransform<MongoDbOutputMeta, MongoDbOutputData> {
   private static final Class<?> PKG = MongoDbOutputMeta.class;
+  private static final String CONST_UNKNOWN = "unknown";
 
   protected MongoDbOutputData.MongoTopLevel mongoTopLevelStructure =
       MongoDbOutputData.MongoTopLevel.INCONSISTENT;
@@ -465,23 +466,24 @@ public class MongoDbOutput extends BaseTransform<MongoDbOutputMeta, MongoDbOutpu
         } catch (Exception e) {
           throw new Exception(
               BaseMessages.getString(
-                  PKG, "MongoInput.ErrorMessage.ErrorLoadingMongoDbConnection", connectionName));
+                  PKG, "MongoDbOutput.ErrorMessage.ErrorLoadingMongoDbConnection", connectionName));
         }
         if (data.connection == null) {
           throw new Exception(
               BaseMessages.getString(
-                  PKG, "MongoInput.ErrorMessage.MongoDbConnection.NotFound", connectionName));
+                  PKG, "MongoDbOutput.ErrorMessage.MongoDbConnection.NotFound", connectionName));
         }
 
         String databaseName = resolve(data.connection.getDbName());
         if (StringUtils.isEmpty(databaseName)) {
-          throw new Exception(BaseMessages.getString(PKG, "MongoInput.ErrorMessage.NoDBSpecified"));
+          throw new Exception(
+              BaseMessages.getString(PKG, "MongoDbOutput.ErrorMessage.NoDBSpecified"));
         }
 
         String collection = resolve(meta.getCollection());
         if (StringUtils.isEmpty(collection)) {
           throw new Exception(
-              BaseMessages.getString(PKG, "MongoInput.ErrorMessage.NoCollectionSpecified"));
+              BaseMessages.getString(PKG, "MongoDbOutput.Messages.Error.NoCollectionSpecified"));
         }
 
         if (!StringUtils.isEmpty(data.connection.getAuthenticationUser())) {
@@ -489,7 +491,7 @@ public class MongoDbOutput extends BaseTransform<MongoDbOutputMeta, MongoDbOutpu
             String authInfo =
                 BaseMessages.getString(
                     PKG,
-                    "MongoDbInput.Message.NormalAuthentication",
+                    "MongoDbOutput.Message.NormalAuthentication",
                     resolve(data.connection.getAuthenticationUser()));
 
             logBasic(authInfo);
@@ -523,13 +525,13 @@ public class MongoDbOutput extends BaseTransform<MongoDbOutputMeta, MongoDbOutpu
 
         return true;
       } catch (UnknownHostException ex) {
-        String hostname = data.connection != null ? data.connection.getHostname() : "unknown";
+        String hostname = data.connection != null ? data.connection.getHostname() : CONST_UNKNOWN;
         logError(
             BaseMessages.getString(PKG, "MongoDbOutput.Messages.Error.UnknownHost", hostname), ex);
         return false;
       } catch (Exception e) {
-        String hostname = data.connection != null ? data.connection.getHostname() : "unknown";
-        String port = data.connection != null ? data.connection.getPort() : "unknown";
+        String hostname = data.connection != null ? data.connection.getHostname() : CONST_UNKNOWN;
+        String port = data.connection != null ? data.connection.getPort() : CONST_UNKNOWN;
         logError(
             BaseMessages.getString(
                 PKG, "MongoDbOutput.Messages.Error.ProblemConnecting", hostname, port),

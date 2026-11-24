@@ -186,7 +186,7 @@ public class BeamBQInputDialog extends BaseTransformDialog {
     wQueryLocation = new TextVar(variables, wContent, SWT.SINGLE | SWT.LEFT | SWT.BORDER);
     PropsUi.setLook(wQueryLocation);
     wQueryLocation.setToolTipText(
-        BaseMessages.getString(PKG, "BeamBQInputDialog.QueryLocation.ToolTip"));
+        BaseMessages.getString(PKG, "BeamBQInputDialog.QueryLocation.Tooltip"));
     FormData fdQueryLocation = new FormData();
     fdQueryLocation.left = new FormAttachment(middle, 0);
     fdQueryLocation.top = new FormAttachment(wlQueryLocation, 0, SWT.CENTER);
@@ -199,7 +199,7 @@ public class BeamBQInputDialog extends BaseTransformDialog {
         BaseMessages.getString(PKG, "BeamBQInputDialog.SkipQueryValidation"));
     PropsUi.setLook(wSkipQueryValidation);
     wSkipQueryValidation.setToolTipText(
-        BaseMessages.getString(PKG, "BeamBQInputDialog.SkipQueryValidation.ToolTip"));
+        BaseMessages.getString(PKG, "BeamBQInputDialog.SkipQueryValidation.Tooltip"));
     FormData fdSkipQueryValidation = new FormData();
     fdSkipQueryValidation.left = new FormAttachment(0, 0);
     fdSkipQueryValidation.top = new FormAttachment(lastControl, margin);
@@ -215,24 +215,23 @@ public class BeamBQInputDialog extends BaseTransformDialog {
     fdlFields.right = new FormAttachment(middle, -margin);
     wlFields.setLayoutData(fdlFields);
 
-    ColumnInfo[] columns =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.Name"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.NewName"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.HopType"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames(),
-              false),
-        };
+    ColumnInfo[] columns = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.Name"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.NewName"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "BeamBQInputDialog.Fields.Column.HopType"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames(),
+          false),
+    };
     wFields =
         new TableView(
             Variables.getADefaultVariableSpace(),

@@ -102,11 +102,8 @@ import org.apache.hop.ui.pipeline.transform.BaseTransformDialog;
 import org.apache.hop.workflow.config.WorkflowRunConfiguration;
 import org.apache.hop.workflow.engines.local.LocalWorkflowRunConfiguration;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
@@ -114,6 +111,11 @@ import org.eclipse.swt.widgets.Shell;
 
 @GuiPlugin
 public class ProjectsGuiPlugin {
+  private static final String CONST_PROJECT = "Project '";
+  private static final String CONST_COULD_NOT_BE_LOADED_BECAUSE = "' could not be loaded because ";
+  private static final String CONST_NO_LONGER_EXISTS_YOU_CAN_UPDATE_THE_PATH =
+      " no longer exists.\n\nYou can update the path in the Project configuration.";
+  private static final String CONST_PROJECT_NOT_AVAILABLE = "Project not available";
 
   public static final Class<?> PKG = ProjectsGuiPlugin.class; // i18n
 
@@ -363,12 +365,12 @@ public class ProjectsGuiPlugin {
         String displayName = missing.projectName != null ? missing.projectName : projectName;
         MessageBox box = new MessageBox(HopGui.getInstance().getShell(), SWT.OK | SWT.ICON_WARNING);
         box.setMessage(
-            "Project '"
+            CONST_PROJECT
                 + displayName
-                + "' could not be loaded because "
+                + CONST_COULD_NOT_BE_LOADED_BECAUSE
                 + missing.path
-                + " no longer exists.\n\nYou can update the path in the Project configuration.");
-        box.setText("Project not available");
+                + CONST_NO_LONGER_EXISTS_YOU_CAN_UPDATE_THE_PATH);
+        box.setText(CONST_PROJECT_NOT_AVAILABLE);
         box.open();
         selectProjectInUiOnly(projectName);
         return;
@@ -695,12 +697,12 @@ public class ProjectsGuiPlugin {
         String displayName = missing.projectName != null ? missing.projectName : projectName;
         MessageBox box = new MessageBox(hopGui.getShell(), SWT.OK | SWT.ICON_WARNING);
         box.setMessage(
-            "Project '"
+            CONST_PROJECT
                 + displayName
-                + "' could not be loaded because "
+                + CONST_COULD_NOT_BE_LOADED_BECAUSE
                 + missing.path
-                + " no longer exists.\n\nYou can update the path in the Project configuration.");
-        box.setText("Project not available");
+                + CONST_NO_LONGER_EXISTS_YOU_CAN_UPDATE_THE_PATH);
+        box.setText(CONST_PROJECT_NOT_AVAILABLE);
         box.open();
         selectProjectInUiOnly(projectName);
         return;
@@ -882,17 +884,11 @@ public class ProjectsGuiPlugin {
       image = "project.svg",
       toolTip = "i18n::HopGui.Toolbar.Project.Tooltip")
   public void showProjectContextMenu() {
-    Control control =
-        HopGui.getInstance().getStatusToolbarWidgets().getControlForMenu(ID_TOOLBAR_ITEM_PROJECT);
-    if (control != null && !control.isDisposed()) {
-      Rectangle rect = control.getBounds();
-      int menuGap = 6;
-      Point location =
-          control.getParent().toDisplay(new Point(rect.x, rect.y + rect.height + menuGap));
-      Menu menu = createProjectContextMenu();
-      menu.setLocation(location);
-      menu.setVisible(true);
+    GuiToolbarWidgets widgets = HopGui.getInstance().getStatusToolbarWidgets();
+    if (widgets == null) {
+      return;
     }
+    widgets.showMenuAbove(ID_TOOLBAR_ITEM_PROJECT, createProjectContextMenu());
   }
 
   private Menu createProjectContextMenu() {
@@ -1069,19 +1065,11 @@ public class ProjectsGuiPlugin {
       image = "environment.svg",
       toolTip = "i18n::HopGui.Toolbar.Environment.Tooltip")
   public void showEnvironmentContextMenu() {
-    Control control =
-        HopGui.getInstance()
-            .getStatusToolbarWidgets()
-            .getControlForMenu(ID_TOOLBAR_ITEM_ENVIRONMENT);
-    if (control != null && !control.isDisposed()) {
-      Rectangle rect = control.getBounds();
-      int menuGap = 6;
-      Point location =
-          control.getParent().toDisplay(new Point(rect.x, rect.y + rect.height + menuGap));
-      Menu menu = createEnvironmentContextMenu();
-      menu.setLocation(location);
-      menu.setVisible(true);
+    GuiToolbarWidgets widgets = HopGui.getInstance().getStatusToolbarWidgets();
+    if (widgets == null) {
+      return;
     }
+    widgets.showMenuAbove(ID_TOOLBAR_ITEM_ENVIRONMENT, createEnvironmentContextMenu());
   }
 
   public void selectProject() {
@@ -1164,12 +1152,12 @@ public class ProjectsGuiPlugin {
         String displayName = missing.projectName != null ? missing.projectName : projectName;
         MessageBox box = new MessageBox(hopGui.getShell(), SWT.OK | SWT.ICON_WARNING);
         box.setMessage(
-            "Project '"
+            CONST_PROJECT
                 + displayName
-                + "' could not be loaded because "
+                + CONST_COULD_NOT_BE_LOADED_BECAUSE
                 + missing.path
-                + " no longer exists.\n\nYou can update the path in the Project configuration.");
-        box.setText("Project not available");
+                + CONST_NO_LONGER_EXISTS_YOU_CAN_UPDATE_THE_PATH);
+        box.setText(CONST_PROJECT_NOT_AVAILABLE);
         box.open();
         selectProjectInUiOnly(projectName);
         return;
@@ -1355,7 +1343,6 @@ public class ProjectsGuiPlugin {
             if ((answer & SWT.YES) != 0) {
               LocalWorkflowRunConfiguration localWorkflowRunConfiguration =
                   new LocalWorkflowRunConfiguration();
-              localWorkflowRunConfiguration.setEnginePluginId("Local");
               WorkflowRunConfiguration local =
                   new WorkflowRunConfiguration(
                       "local",

@@ -27,6 +27,7 @@ import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.i18n.BaseMessages;
+import org.apache.hop.metadata.api.IEnumHasCodeAndDescription;
 import org.apache.hop.ui.core.PropsUi;
 import org.apache.hop.ui.core.database.dialog.DatabaseExplorerDialog;
 import org.apache.hop.ui.core.dialog.BaseDialog;
@@ -60,12 +61,11 @@ import org.eclipse.swt.widgets.Shell;
 public class ActionMssqlBulkLoadDialog extends ActionDialog {
   private static final Class<?> PKG = ActionMssqlBulkLoad.class;
 
-  private static final String[] FILETYPES =
-      new String[] {
-        BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.Text"),
-        BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.Csv"),
-        BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.All")
-      };
+  private static final String[] FILETYPES = {
+    BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.Text"),
+    BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.Csv"),
+    BaseMessages.getString(PKG, "ActionMssqlBulkLoad.Filetype.All")
+  };
   public static final String CONST_SYSTEM_BUTTON_BROWSE = "System.Button.Browse";
 
   private MetaSelectionLine<DatabaseMeta> wConnection;
@@ -465,10 +465,7 @@ public class ActionMssqlBulkLoadDialog extends ActionDialog {
     fdlCodePage.top = new FormAttachment(0, margin);
     wlCodePage.setLayoutData(fdlCodePage);
     wCodePage = new CCombo(wAdvancedComp, SWT.SINGLE | SWT.READ_ONLY | SWT.BORDER);
-    wCodePage.add("ACP");
-    wCodePage.add("OEM");
-    wCodePage.add("RAW");
-    wCodePage.add(BaseMessages.getString(PKG, "ActionMssqlBulkLoad.CodePage.Specific"));
+    wCodePage.setItems(IEnumHasCodeAndDescription.getDescriptions(MssqlBulkLoadCodePage.class));
     wCodePage.select(0); // +1: starts at -1
 
     PropsUi.setLook(wCodePage);
@@ -1009,7 +1006,7 @@ public class ActionMssqlBulkLoadDialog extends ActionDialog {
   }
 
   private void setCodeType() {
-    if (wCodePage.getSelectionIndex() == 3) {
+    if (MssqlBulkLoadCodePage.lookup(wCodePage.getText()) == MssqlBulkLoadCodePage.SPECIFIC) {
       wSpecificCodePage.setEnabled(true);
       wlSpecificCodePage.setEnabled(true);
     } else {
@@ -1042,7 +1039,10 @@ public class ActionMssqlBulkLoadDialog extends ActionDialog {
     if (action.getLineTerminated() != null) {
       wLineterminated.setText(action.getLineTerminated());
     }
-    if (action.getCodePage() != null) {
+    MssqlBulkLoadCodePage codePage = MssqlBulkLoadCodePage.lookup(action.getCodePage());
+    if (codePage != null) {
+      wCodePage.setText(codePage.getDescription());
+    } else if (action.getCodePage() != null) {
       wCodePage.setText(action.getCodePage());
     } else {
       wCodePage.setText("RAW");
@@ -1118,7 +1118,9 @@ public class ActionMssqlBulkLoadDialog extends ActionDialog {
     action.setDataFileType(wDataFiletype.getText());
     action.setFieldTerminator(wFieldTerminator.getText());
     action.setLineTerminated(wLineterminated.getText());
-    action.setCodePage(wCodePage.getText());
+    // Store the code, not the label: the label is translated
+    MssqlBulkLoadCodePage codePage = MssqlBulkLoadCodePage.lookup(wCodePage.getText());
+    action.setCodePage(codePage == null ? wCodePage.getText() : codePage.getCode());
     action.setSpecificCodePage(wSpecificCodePage.getText());
     action.setFormatFileName(wFormatFilename.getText());
     action.setFireTriggers(wFireTriggers.getSelection());

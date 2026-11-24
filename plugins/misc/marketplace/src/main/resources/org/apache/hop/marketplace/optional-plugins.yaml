@@ -158,6 +158,14 @@ plugins:
     description: Microsoft Azure Cloud platform
     installPath: plugins/tech/azure
     modulePath: plugins/tech/azure
+  - artifactId: hop-tech-microsoft365
+    name: Microsoft 365
+    category: Technology
+    description: >-
+      Named SharePoint connections usable as a VFS location: read and write the files of
+      SharePoint document libraries and Microsoft Teams channels through Microsoft Graph.
+    installPath: plugins/tech/microsoft365
+    modulePath: plugins/tech/microsoft365
   - artifactId: hop-tech-aws
     name: AWS
     category: Technology
@@ -194,6 +202,14 @@ plugins:
     description: OpenLineage lineage sink — emit run, file and warehouse (column-level) lineage to Marquez or any OpenLineage endpoint.
     installPath: plugins/tech/openlineage
     modulePath: plugins/tech/openlineage
+  - artifactId: hop-tech-datahub
+    name: DataHub
+    category: Technology
+    description: >-
+      DataHub lineage sink — write pipelines, workflows, their runs and the files and tables they
+      read and write to DataHub. Install this plugin with the OpenLineage plugin.
+    installPath: plugins/tech/datahub
+    modulePath: plugins/tech/datahub
   - artifactId: hop-tech-salesforce
     name: SaleForce
     category: Technology

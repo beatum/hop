@@ -32,6 +32,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -45,13 +46,14 @@ import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.vfs2.FileName;
 import org.apache.commons.vfs2.FileObject;
-import org.apache.hop.core.BlockingBatchingRowSet;
 import org.apache.hop.core.BlockingRowSet;
 import org.apache.hop.core.Const;
+import org.apache.hop.core.CursorRowSet;
 import org.apache.hop.core.HopVersionProvider;
 import org.apache.hop.core.IExecutor;
 import org.apache.hop.core.IExtensionData;
 import org.apache.hop.core.IRowSet;
+import org.apache.hop.core.LockFreeRowSet;
 import org.apache.hop.core.QueueRowSet;
 import org.apache.hop.core.Result;
 import org.apache.hop.core.ResultFile;
@@ -66,6 +68,9 @@ import org.apache.hop.core.exception.HopTransformException;
 import org.apache.hop.core.exception.HopValueException;
 import org.apache.hop.core.extension.ExtensionPointHandler;
 import org.apache.hop.core.extension.HopExtensionPoint;
+import org.apache.hop.core.failure.ExecutionFailure;
+import org.apache.hop.core.failure.FailurePhase;
+import org.apache.hop.core.failure.IExecutionFailureListener;
 import org.apache.hop.core.logging.HopLogStore;
 import org.apache.hop.core.logging.IHasLogChannel;
 import org.apache.hop.core.logging.ILogChannel;
@@ -92,6 +97,7 @@ import org.apache.hop.core.variables.Variables;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.core.vfs.HopVfsNamespace;
 import org.apache.hop.core.vfs.HopVfsNamespaces;
+import org.apache.hop.execution.failure.ExecutionFailures;
 import org.apache.hop.execution.sampler.IExecutionDataSampler;
 import org.apache.hop.execution.sampler.IExecutionDataSamplerStore;
 import org.apache.hop.i18n.BaseMessages;
@@ -101,6 +107,7 @@ import org.apache.hop.pipeline.analysis.BufferDeadlockRisk.SpillHop;
 import org.apache.hop.pipeline.analysis.PipelineBufferDeadlockAnalyzer;
 import org.apache.hop.pipeline.config.IPipelineEngineRunConfiguration;
 import org.apache.hop.pipeline.config.PipelineRunConfiguration;
+import org.apache.hop.pipeline.debug.DebugController;
 import org.apache.hop.pipeline.engine.EngineCompatibilityChecker;
 import org.apache.hop.pipeline.engine.EngineComponent.ComponentExecutionStatus;
 import org.apache.hop.pipeline.engine.EngineMetric;
@@ -325,6 +332,15 @@ public abstract class Pipeline
   /** The number of errors that have occurred during execution of the pipeline. */
   private final AtomicInteger errors;
 
+  /** The transform failures of the current execution, in the order they happened. */
+  private final List<ExecutionFailure> failures = Collections.synchronizedList(new ArrayList<>());
+
+  /** The failure of the current execution as a whole, null while it has not failed. */
+  private volatile ExecutionFailure runFailure;
+
+  private final List<IExecutionFailureListener> executionFailureListeners =
+      Collections.synchronizedList(new ArrayList<>());
+
   /** Whether the pipeline is ready to start. */
   private boolean readyToStart;
 
@@ -390,6 +406,20 @@ public abstract class Pipeline
 
   @Getter @Setter protected int rowSetSize;
 
+  /**
+   * When set before {@link #prepareExecution()}, hops are {@link CursorRowSet}s and transform
+   * threads park between rows until {@link DebugController} grants a permit.
+   */
+  @Getter @Setter private DebugController debugController;
+
+  /**
+   * Rows kept in memory on each debug hop before the rest spill to {@link #debugSpillDirectory}.
+   */
+  @Getter @Setter private int debugRowMemoryThreshold = 10_000;
+
+  /** Spill directory for debug hops. Blank uses the system temp directory. */
+  @Getter @Setter private String debugSpillDirectory;
+
   @Setter protected boolean feedbackShown;
 
   @Setter protected int feedbackSize;
@@ -402,6 +432,18 @@ public abstract class Pipeline
 
   /** Directory for {@link SpillingRowSet} temp files; blank uses the system temp directory. */
   @Getter @Setter protected String bufferDeadlockSpillDirectory;
+
+  /**
+   * Experimental: use {@link LockFreeRowSet} instead of {@link BlockingRowSet} between transforms
+   * (hops that spill to disk keep their {@link SpillingRowSet}).
+   */
+  @Getter @Setter protected boolean lockFreeRowSets;
+
+  /**
+   * Whether this pipeline does the once-per-run preparation of its transforms (see {@link
+   * TransformPrepareOnce}). Off for the per-partition pipelines of a distributed engine.
+   */
+  private boolean preparingTransformsOnce = true;
 
   public void setBufferDeadlockSpillHops(Set<SpillHop> bufferDeadlockSpillHops) {
     this.bufferDeadlockSpillHops =
@@ -639,6 +681,7 @@ public abstract class Pipeline
       // An inner failure handler already brought the pipeline to a terminal state.
       return;
     }
+    reportRunFailure(FailurePhase.PREPARE, e);
     // Stopping is the terminal state this pipeline can still reach through the normal path: it
     // releases whatever was already initialized and alerts the execution stopped listeners.
     stopAll();
@@ -646,6 +689,8 @@ public abstract class Pipeline
 
   private void prepareExecutionInternal() throws HopException {
     setPreparing(true);
+    failures.clear();
+    runFailure = null;
     executionStartDate = new Date();
     setRunning(false);
 
@@ -854,33 +899,20 @@ public abstract class Pipeline
         //
         if (dispatchType != TYPE_DISP_N_M) {
           for (int c = 0; c < nrCopies; c++) {
-            IRowSet rowSet;
-            switch (getPipelineType()) {
-              case Normal:
-                // This is a temporary patch until the batching rowset has proven
-                // to be working in all situations.
-                // Currently there are stalling problems when dealing with small
-                // amounts of rows.
-                //
-                Boolean batchingRowSet =
-                    ValueMetaBase.convertStringToBoolean(
-                        System.getProperty(Const.HOP_BATCHING_ROWSET));
-                if (batchingRowSet != null && batchingRowSet) {
-                  rowSet = new BlockingBatchingRowSet(rowSetSize);
-                } else if (PipelineBufferDeadlockAnalyzer.shouldSpill(
-                    bufferDeadlockSpillHops, thisTransform.getName(), nextTransform.getName())) {
-                  rowSet = new SpillingRowSet(rowSetSize, bufferDeadlockSpillDirectory);
-                } else {
-                  rowSet = new BlockingRowSet(rowSetSize);
-                }
-                break;
+            IRowSet rowSet = createDebugRowSet();
+            if (rowSet == null) {
+              switch (getPipelineType()) {
+                case Normal:
+                  rowSet = newRowSet(thisTransform.getName(), nextTransform.getName());
+                  break;
 
-              case SingleThreaded:
-                rowSet = new QueueRowSet();
-                break;
+                case SingleThreaded:
+                  rowSet = new QueueRowSet();
+                  break;
 
-              default:
-                throw new HopException("Unhandled pipeline type: " + getPipelineType());
+                default:
+                  throw new HopException("Unhandled pipeline type: " + getPipelineType());
+              }
             }
 
             switch (dispatchType) {
@@ -918,12 +950,9 @@ public abstract class Pipeline
           // distribution...
           for (int s = 0; s < thisCopies; s++) {
             for (int t = 0; t < nextCopies; t++) {
-              IRowSet rowSet;
-              if (PipelineBufferDeadlockAnalyzer.shouldSpill(
-                  bufferDeadlockSpillHops, thisTransform.getName(), nextTransform.getName())) {
-                rowSet = new SpillingRowSet(rowSetSize, bufferDeadlockSpillDirectory);
-              } else {
-                rowSet = new BlockingRowSet(rowSetSize);
+              IRowSet rowSet = createDebugRowSet();
+              if (rowSet == null) {
+                rowSet = newRowSet(thisTransform.getName(), nextTransform.getName());
               }
               rowSet.setThreadNameFromToCopy(
                   thisTransform.getName(), s, nextTransform.getName(), t);
@@ -1290,6 +1319,17 @@ public abstract class Pipeline
 
     log.snap(Metrics.METRIC_PIPELINE_INIT_STOP);
 
+    // Once-per-run work of the transforms (truncate a table, create it ...): on one copy, before
+    // any copy reads a row
+    try {
+      TransformPrepareOnce.prepare(this);
+    } catch (HopException e) {
+      log.logError(e.getMessage(), e);
+      disposeInitializedTransforms();
+      setFinished(true);
+      throw e;
+    }
+
     setReadyToStart(true);
   }
 
@@ -1481,7 +1521,11 @@ public abstract class Pipeline
 
           // Drop rowset buffers and any SpillingRowSet temp files (stop mid-run or normal end).
           // Safe here: all transform threads have finished before this listener runs.
-          cleanupRowSets();
+          // A debug session keeps the hop buffers so the rows can still be inspected after stop.
+          // The caller discards them with cleanup().
+          if (debugController == null) {
+            cleanupRowSets();
+          }
 
           // release unused vfs connections, of the namespace this pipeline resolved its files in
           HopVfs.freeUnusedResources(this);
@@ -1493,6 +1537,11 @@ public abstract class Pipeline
     executionFinishedListeners.add(0, executionListener);
 
     setRunning(true);
+    if (debugController != null) {
+      // Threads park in the controller. Leave the per-transform paused flag alone: that one stalls
+      // inside getRow and putRow, which would freeze a step in the middle of a row.
+      setPaused(true);
+    }
 
     switch (getPipelineType()) {
       case Normal:
@@ -1558,6 +1607,10 @@ public abstract class Pipeline
     ITransformFinishedListener transformFinishedExtensionPoint =
         (pipeline, transformMeta, transform) -> {
           try {
+            if (transform.getErrors() > 0) {
+              // A transform can log an error and set its error count without throwing
+              reportTransformFailure(transform, FailurePhase.RUN, null);
+            }
             ExtensionPointHandler.callExtensionPoint(
                 log, this, HopExtensionPoint.TransformFinished.id, combi);
           } catch (Exception e) {
@@ -1615,6 +1668,13 @@ public abstract class Pipeline
       // example - while a waiting caller (hop-run, for one) can leave the JVM the moment it is
       // released.
       //
+      // A transform whose init() threw has no errors of its own, but it did fail
+      if (listenerException != null) {
+        reportRunFailure(FailurePhase.FINISH, listenerException);
+      } else if (getErrors() > 0 || hasTransformFailures()) {
+        reportRunFailure(FailurePhase.RUN, null);
+      }
+
       ExtensionPointHandler.callExtensionPoint(
           log, this, HopExtensionPoint.PipelineCompleted.id, this);
 
@@ -1752,6 +1812,25 @@ public abstract class Pipeline
     for (TransformMetaDataCombi combi : transforms) {
       combi.transform.cleanup();
     }
+  }
+
+  /**
+   * Debug sessions allocate a {@link CursorRowSet} per hop. A normal run returns null and the
+   * caller keeps the usual blocking, spilling, or single-threaded rowset.
+   */
+  private CursorRowSet createDebugRowSet() {
+    if (debugController == null) {
+      return null;
+    }
+    CursorRowSet rowSet =
+        new CursorRowSet(Math.max(1, debugRowMemoryThreshold), debugSpillDirectory);
+    rowSet.setRowEnteredListener(
+        (set, rowMeta, row) -> {
+          if (debugController != null) {
+            debugController.rowEntered(set, rowMeta, row);
+          }
+        });
+    return rowSet;
   }
 
   /**
@@ -1952,6 +2031,9 @@ public abstract class Pipeline
     setInitializing(false);
     setStopped(true);
     isAlreadyStopped.set(true);
+    if (debugController != null) {
+      debugController.cancelWaiters();
+    }
 
     fireExecutionStoppedListeners();
   }
@@ -2101,6 +2183,93 @@ public abstract class Pipeline
   }
 
   /**
+   * Record and announce the failure of a transform, once per transform copy and execution: the
+   * {@link HopExtensionPoint#TransformFailed} extension point, then the execution failure
+   * listeners. Never throws.
+   *
+   * @param transform the transform that failed
+   * @param phase INIT or RUN
+   * @param throwable what it threw, or null when it only logged an error and set its error count
+   */
+  public void reportTransformFailure(
+      ITransform transform, FailurePhase phase, Throwable throwable) {
+    try {
+      ExecutionFailure failure;
+      synchronized (failures) {
+        String id = transform.getLogChannelId();
+        for (ExecutionFailure existing : failures) {
+          if (existing.getComponent() != null
+              && Objects.equals(existing.getComponent().getExecutionId(), id)) {
+            return;
+          }
+        }
+        failure = ExecutionFailures.forTransform(transform, phase, throwable);
+        failures.add(failure);
+      }
+      ExecutionFailures.announce(
+          transform.getLogChannel(),
+          this,
+          HopExtensionPoint.TransformFailed.id,
+          failure,
+          executionFailureListeners);
+    } catch (Throwable e) {
+      // Reporting a failure must never get in the way of handling it
+      log.logError("Unable to report the failure of transform " + transform.getTransformName(), e);
+    }
+  }
+
+  /**
+   * Record and announce the failure of this pipeline as a whole, once per execution: caused by the
+   * first transform that failed, or else by what was thrown.
+   */
+  private void reportRunFailure(FailurePhase phase, Throwable throwable) {
+    try {
+      ExecutionFailure failure;
+      synchronized (failures) {
+        if (runFailure != null) {
+          return;
+        }
+        ExecutionFailure first = failures.isEmpty() ? null : failures.get(0);
+        failure = ExecutionFailures.forRun(this, phase, first, throwable);
+        runFailure = failure;
+      }
+      ExecutionFailures.announce(
+          log, this, HopExtensionPoint.PipelineFailed.id, failure, executionFailureListeners);
+    } catch (Throwable e) {
+      log.logError("Unable to report the failure of pipeline " + getName(), e);
+    }
+  }
+
+  private boolean hasTransformFailures() {
+    synchronized (failures) {
+      return !failures.isEmpty();
+    }
+  }
+
+  /** The transform failures of the current execution, in the order they happened. */
+  @Override
+  public List<ExecutionFailure> getFailures() {
+    synchronized (failures) {
+      return new ArrayList<>(failures);
+    }
+  }
+
+  /** The failure of the current execution as a whole, or null if it has not failed. */
+  @Override
+  public ExecutionFailure getRunFailure() {
+    return runFailure;
+  }
+
+  /** Be told about every transform failure and the pipeline failure of this pipeline. */
+  public void addExecutionFailureListener(IExecutionFailureListener listener) {
+    executionFailureListeners.add(listener);
+  }
+
+  public void removeExecutionFailureListener(IExecutionFailureListener listener) {
+    executionFailureListeners.remove(listener);
+  }
+
+  /**
    * Gets the result of the pipeline. The Result object contains such measures as the number of
    * errors, number of lines read/written/input/output/updated/rejected, etc.
    *
@@ -2134,6 +2303,10 @@ public abstract class Pipeline
     }
 
     result.setRows(resultRows);
+    ExecutionFailure failure = runFailure;
+    if (failure != null) {
+      result.getFailures().add(failure);
+    }
     if (!Utils.isEmpty(resultFiles)) {
       result.setResultFiles(new HashMap<>());
       for (ResultFile resultFile : resultFiles) {
@@ -2274,6 +2447,18 @@ public abstract class Pipeline
     return safeModeEnabled;
   }
 
+  /** Creates the row set of a hop in a normal (multi-threaded) pipeline. */
+  private IRowSet newRowSet(String fromTransformName, String toTransformName) {
+    if (PipelineBufferDeadlockAnalyzer.shouldSpill(
+        bufferDeadlockSpillHops, fromTransformName, toTransformName)) {
+      return new SpillingRowSet(rowSetSize, bufferDeadlockSpillDirectory);
+    }
+    if (lockFreeRowSets) {
+      return new LockFreeRowSet(rowSetSize);
+    }
+    return new BlockingRowSet(rowSetSize);
+  }
+
   /**
    * This adds a row producer to the pipeline that just got set up. It is preferable to run this
    * BEFORE execute() but after prepareExecution()
@@ -2294,12 +2479,16 @@ public abstract class Pipeline
     }
 
     // We are going to add an extra IRowSet to this iTransform.
-    IRowSet rowSet =
-        switch (getPipelineType()) {
-          case Normal -> new BlockingRowSet(rowSetSize);
-          case SingleThreaded -> new QueueRowSet();
-          default -> throw new HopException("Unhandled pipeline type: " + getPipelineType());
-        };
+    IRowSet rowSet = createDebugRowSet();
+    if (rowSet == null) {
+      rowSet =
+          switch (getPipelineType()) {
+            case Normal ->
+                lockFreeRowSets ? new LockFreeRowSet(rowSetSize) : new BlockingRowSet(rowSetSize);
+            case SingleThreaded -> new QueueRowSet();
+            default -> throw new HopException("Unhandled pipeline type: " + getPipelineType());
+          };
+    }
 
     // Add this rowset to the list of active rowsets for the selected transform
     transform.addRowSetToInputRowSets(rowSet);
@@ -2440,6 +2629,22 @@ public abstract class Pipeline
    *
    * @param preparing true if the pipeline is preparing for execution, false otherwise
    */
+  /**
+   * @return false when this pipeline doesn't do the once-per-run preparation of its transforms: a
+   *     per-partition (per-bundle) pipeline of a distributed engine, whose driver did it
+   */
+  public boolean isPreparingTransformsOnce() {
+    return preparingTransformsOnce;
+  }
+
+  /**
+   * @param preparingTransformsOnce false for a per-partition (per-bundle) pipeline of a distributed
+   *     engine: it only flags the transforms its driver prepared (see {@link TransformPrepareOnce})
+   */
+  public void setPreparingTransformsOnce(boolean preparingTransformsOnce) {
+    this.preparingTransformsOnce = preparingTransformsOnce;
+  }
+
   public void setPreparing(boolean preparing) {
     status.updateAndGet(
         v -> preparing ? v | PREPARING.mask : (BIT_STATUS_SUM ^ PREPARING.mask) & v);
@@ -2727,6 +2932,11 @@ public abstract class Pipeline
   /** Pauses the pipeline (pause all transforms). */
   @Override
   public void pauseExecution() {
+    if (debugController != null) {
+      debugController.pause();
+      setPaused(true);
+      return;
+    }
     setPaused(true);
     for (TransformMetaDataCombi combi : transforms) {
       combi.transform.pauseRunning();
@@ -2736,6 +2946,11 @@ public abstract class Pipeline
   /** Resumes running the pipeline after a pause (resume all transforms). */
   @Override
   public void resumeExecution() {
+    if (debugController != null) {
+      debugController.continueAll();
+      setPaused(false);
+      return;
+    }
     for (TransformMetaDataCombi combi : transforms) {
       combi.transform.resumeRunning();
     }

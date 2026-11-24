@@ -17,13 +17,18 @@
 
 package org.apache.hop.lineage;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.commons.vfs2.FileObject;
+import org.apache.hop.core.row.IRowMeta;
+import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.lineage.context.LineageContext;
 import org.apache.hop.lineage.hub.LineageHub;
 import org.apache.hop.lineage.model.FileIoContentSchema;
 import org.apache.hop.lineage.model.FileIoLineagePayload;
 import org.apache.hop.lineage.model.FileIoOperation;
+import org.apache.hop.lineage.model.FileIoTabularColumn;
 import org.apache.hop.lineage.model.LineageEvent;
 import org.apache.hop.lineage.model.LineageEventKind;
 import org.apache.hop.pipeline.transform.ITransform;
@@ -38,6 +43,50 @@ import org.apache.hop.workflow.engine.IWorkflowEngine;
 public final class LineageFileIoEmitter {
 
   private LineageFileIoEmitter() {}
+
+  /**
+   * Whether lineage is enabled. Callers that do extra work only to fill in an event (a file size, a
+   * URI) can check this first; the emit methods check it too.
+   */
+  public static boolean isEnabled() {
+    return LineageHub.getInstance().isEnabled();
+  }
+
+  /**
+   * Whether lineage is observed for the run of a transform: enabled with variables, or the run
+   * reports to a sink of its own.
+   */
+  public static boolean isEnabled(ITransform transform) {
+    return LineageSinkRoutes.isEnabled(transform);
+  }
+
+  /**
+   * Converts a Hop {@link IRowMeta} to the neutral {@link FileIoContentSchema} a file event
+   * carries, so a sink can describe the file's columns (name and Hop type). Returns {@code null}
+   * for a null/empty row shape. Columns have no path locator and no structure tree here: a reader
+   * that knows a hierarchy derives its own.
+   *
+   * @param rowMeta the row shape read from or written to the file
+   * @param formatHint short format name ({@code csv}, {@code json}, …), or null when unknown
+   */
+  public static FileIoContentSchema toContentSchema(IRowMeta rowMeta, String formatHint) {
+    if (rowMeta == null || rowMeta.isEmpty()) {
+      return null;
+    }
+    List<FileIoTabularColumn> columns = new ArrayList<>(rowMeta.size());
+    for (IValueMeta valueMeta : rowMeta.getValueMetaList()) {
+      columns.add(
+          new FileIoTabularColumn(
+              valueMeta.getName(),
+              valueMeta.getTypeDesc(),
+              valueMeta.getLength(),
+              valueMeta.getPrecision(),
+              null,
+              null,
+              false));
+    }
+    return new FileIoContentSchema(formatHint == null ? "" : formatHint, columns, List.of());
+  }
 
   /**
    * Records a file/object-store operation performed by a workflow action during {@link
@@ -87,7 +136,10 @@ public final class LineageFileIoEmitter {
       boolean success,
       String message,
       FileIoContentSchema contentSchema) {
-    if (workflow == null || action == null || operation == null) {
+    if (workflow == null
+        || action == null
+        || operation == null
+        || !LineageSinkRoutes.isEnabled(workflow)) {
       return;
     }
     emit(
@@ -113,7 +165,10 @@ public final class LineageFileIoEmitter {
       Long bytesTransferred,
       boolean success,
       String message) {
-    if (workflow == null || action == null || operation == null) {
+    if (workflow == null
+        || action == null
+        || operation == null
+        || !LineageSinkRoutes.isEnabled(workflow)) {
       return;
     }
     emitWorkflowActionFileIo(
@@ -168,7 +223,7 @@ public final class LineageFileIoEmitter {
       boolean success,
       String message,
       FileIoContentSchema contentSchema) {
-    if (transform == null || operation == null) {
+    if (transform == null || operation == null || !isEnabled(transform)) {
       return;
     }
     LineageContext.Builder ctx = LineageRunLifecycleEmitter.transformContextBuilder(transform);
@@ -225,6 +280,9 @@ public final class LineageFileIoEmitter {
       boolean success,
       String message,
       FileIoContentSchema contentSchema) {
+    if (!isEnabled(transform)) {
+      return;
+    }
     emitTransformFileIo(
         transform,
         operation,

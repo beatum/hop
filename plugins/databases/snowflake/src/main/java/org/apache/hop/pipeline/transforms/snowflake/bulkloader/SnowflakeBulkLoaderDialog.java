@@ -84,28 +84,25 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
       SnowflakeBulkLoaderMeta.class; // for i18n purposes, needed by Translator2!!
 
   /** The descriptions for the location type drop down */
-  private static final String[] LOCATION_TYPE_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.User"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.Table"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.InternalStage")
-      };
+  private static final String[] LOCATION_TYPE_COMBO = {
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.User"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.Table"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.LocationType.InternalStage")
+  };
 
   /** The descriptions for the on error drop down */
-  private static final String[] ON_ERROR_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.Continue"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.SkipFile"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.SkipFilePercent"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.Abort")
-      };
+  private static final String[] ON_ERROR_COMBO = {
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.Continue"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.SkipFile"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.SkipFilePercent"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.OnError.Abort")
+  };
 
   /** The descriptions for the data type drop down */
-  private static final String[] DATA_TYPE_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.DataType.CSV"),
-        BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.DataType.JSON")
-      };
+  private static final String[] DATA_TYPE_COMBO = {
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.DataType.CSV"),
+    BaseMessages.getString(PKG, "SnowflakeBulkLoad.Dialog.DataType.JSON")
+  };
 
   public static final String CONST_SYSTEM_BUTTON_BROWSE = "System.Button.Browse";
 
@@ -236,7 +233,7 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
    * End Fields tab
    * ************************************************/
 
-  private SnowflakeBulkLoaderMeta input;
+  private final SnowflakeBulkLoaderMeta input;
 
   private Link wDevelopedBy;
   private FormData fdDevelopedBy;
@@ -246,7 +243,7 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
   private Display display;
 
   /** List of ColumnInfo that should have the field names of the selected database table */
-  private List<ColumnInfo> tableFieldColumns = new ArrayList<>();
+  private final List<ColumnInfo> tableFieldColumns = new ArrayList<>();
 
   public SnowflakeBulkLoaderDialog(
       Shell parent,
@@ -1713,7 +1710,9 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
           } else {
             throw new HopTransformException(
                 BaseMessages.getString(
-                    PKG, "TableOutputDialog.FailedToFindField.Message", sf.getStreamField()));
+                    PKG,
+                    "SnowflakeBulkLoader.Dialog.FailedToFindField.Message",
+                    sf.getStreamField()));
           }
         }
         prev = prevNew;
@@ -1728,15 +1727,16 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
           } else {
             MessageBox mb = new MessageBox(shell, SWT.OK | SWT.ICON_INFORMATION);
             mb.setMessage(
-                BaseMessages.getString(PKG, "SnowflakeBulkLoaderDialog.NoSQLNeeds.DialogMessage"));
+                BaseMessages.getString(PKG, "SnowflakeBulkLoader.Dialog.NoSQLNeeds.DialogMessage"));
             mb.setText(
-                BaseMessages.getString(PKG, "SnowflakeBulkLoaderDialog.NoSQLNeeds.DialogTitle"));
+                BaseMessages.getString(PKG, "SnowflakeBulkLoader.Dialog.NoSQLNeeds.DialogTitle"));
             mb.open();
           }
         } else {
           MessageBox mb = new MessageBox(shell, SWT.OK | SWT.ICON_ERROR);
           mb.setMessage(sql.getError());
-          mb.setText(BaseMessages.getString(PKG, "SnowBulkLoaderDialog.SQLError.DialogTitle"));
+          mb.setText(
+              BaseMessages.getString(PKG, "SnowflakeBulkLoader.Dialog.SQLError.DialogTitle"));
           mb.open();
         }
       }
@@ -1744,8 +1744,8 @@ public class SnowflakeBulkLoaderDialog extends BaseTransformDialog {
     } catch (HopException ke) {
       new ErrorDialog(
           shell,
-          BaseMessages.getString(PKG, "SnowBulkLoaderDialog.BuildSQLError.DialogTitle"),
-          BaseMessages.getString(PKG, "SnowBulkLoaderDialog.BuildSQLError.DialogMessage"),
+          BaseMessages.getString(PKG, "SnowflakeBulkLoader.Dialog.BuildSQLError.DialogTitle"),
+          BaseMessages.getString(PKG, "SnowflakeBulkLoader.Dialog.BuildSQLError.DialogMessage"),
           ke);
       ke.printStackTrace();
     }

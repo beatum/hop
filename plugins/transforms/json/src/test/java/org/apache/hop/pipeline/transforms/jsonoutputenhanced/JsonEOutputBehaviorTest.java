@@ -162,7 +162,7 @@ class JsonEOutputBehaviorTest {
   }
 
   @Test
-  void missingRuntimeGroupKeyIsAnActionableError() throws Exception {
+  void missingRuntimeGroupKeyIsAnActionableError() {
     JsonEOutputMeta meta = meta(JsonEOutputMeta.OperationType.OUTPUT_VALUE);
     meta.getKeyFields().add(new JsonEOutputKeyField("gone"));
     try (Harness h = new Harness(meta, rowMeta("payload"), new Object[] {"x"})) {
@@ -475,6 +475,44 @@ class JsonEOutputBehaviorTest {
     assertEquals("x", file.get("rows").get("payload").asText());
     assertFalse(file.toString().contains("\"b\""), file.toString());
     assertFalse(file.toString().contains("\"y\""), file.toString());
+  }
+
+  /**
+   * Without group keys every row is written to the file as it arrives (#2929): no row is kept in
+   * memory and the bytes reach the file before the input ends.
+   */
+  @Test
+  void rowsWithoutGroupKeysAreStreamedToTheFile() throws Exception {
+    final int rows = 1000;
+    final String value = "x".repeat(100);
+    JsonEOutputMeta meta = meta(JsonEOutputMeta.OperationType.WRITE_TO_FILE);
+    meta.setJsonBloc("data");
+    Object[][] input = new Object[rows][];
+    for (int i = 0; i < rows; i++) {
+      input[i] = new Object[] {value};
+    }
+    try (Harness h = new Harness(meta, rowMeta("payload"), input)) {
+      assertTrue(h.transform.init());
+      assertTrue(h.data.streamFileRows);
+      assertFalse(h.data.collectGroupItems);
+      for (int i = 1; i <= rows; i++) {
+        assertTrue(h.transform.processRow());
+        assertTrue(h.data.jsonKeyGroupItems.isEmpty(), "row " + i + " was kept in memory");
+        assertEquals(i, h.data.fileItemCount);
+        if (i > 1) {
+          assertNull(h.data.pendingFileItem, "row " + i + " was parked instead of written");
+        }
+      }
+      // About 115KB of rows, only the stream buffers may still hold some of it.
+      long writtenBeforeEnd = h.data.countingStream.getCount();
+      assertTrue(writtenBeforeEnd > 50_000, writtenBeforeEnd + " bytes written before the end");
+      assertFalse(h.transform.processRow());
+      assertEquals(0L, h.transform.getErrors());
+    }
+    JsonNode data = parse(read(base + "/out.json")).get("data");
+    assertEquals(rows, data.size());
+    assertEquals(value, data.get(0).get("payload").asText());
+    assertEquals(value, data.get(rows - 1).get("payload").asText());
   }
 
   @Test

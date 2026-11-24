@@ -43,6 +43,7 @@ import org.apache.hop.ui.core.dialog.BaseDialog;
 import org.apache.hop.ui.core.dialog.ErrorDialog;
 import org.apache.hop.ui.core.dialog.MessageBox;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.ComboVar;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
@@ -105,7 +106,7 @@ public class CreditCardValidatorDialog extends BaseTransformDialog {
 
   private TableView wOutputFields;
 
-  private List<String> binCsvColumns = new ArrayList<>();
+  private final List<String> binCsvColumns = new ArrayList<>();
 
   private final CreditCardValidatorMeta input;
 
@@ -574,54 +575,53 @@ public class CreditCardValidatorDialog extends BaseTransformDialog {
     fdlOutputFields.top = new FormAttachment(wBinCsvColumn, margin);
     wlOutputFields.setLayoutData(fdlOutputFields);
 
-    ColumnInfo[] outputColInfos =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputName.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              false,
-              120),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              new String[0],
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputType.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames(),
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputFormat.Column"),
-              ColumnInfo.COLUMN_TYPE_FORMAT,
-              2),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputLength.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputPrecision.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputCurrency.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputDecimal.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputGroup.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputTrim.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaBase.trimTypeDesc,
-              true),
-        };
+    ColumnInfo[] outputColInfos = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputName.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          false,
+          120),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          new String[0],
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputType.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames(),
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputFormat.Column"),
+          ColumnInfo.COLUMN_TYPE_FORMAT,
+          2),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputLength.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputPrecision.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputCurrency.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputDecimal.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputGroup.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "CreditCardValidatorDialog.OutputTrim.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaBase.trimTypeDesc,
+          true),
+    };
     outputColInfos[1].setComboValueSupplier(() -> binCsvColumns.toArray(new String[0]));
     wOutputFields =
         new TableView(
@@ -882,17 +882,10 @@ public class CreditCardValidatorDialog extends BaseTransformDialog {
   private void get() {
     if (!gotPreviousFields) {
       try {
-        String columnName = wFieldName.getText();
-        wFieldName.removeAll();
         IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
         if (r != null) {
-          r.getFieldNames();
-
-          for (int i = 0; i < r.getFieldNames().length; i++) {
-            wFieldName.add(r.getFieldNames()[i]);
-          }
+          ComboItems.setItemsKeepingText(wFieldName, r.getFieldNames());
         }
-        wFieldName.setText(columnName);
         gotPreviousFields = true;
       } catch (HopException ke) {
         new ErrorDialog(

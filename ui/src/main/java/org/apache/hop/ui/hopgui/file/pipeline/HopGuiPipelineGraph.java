@@ -29,12 +29,15 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.Timer;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
@@ -61,6 +64,8 @@ import org.apache.hop.core.gui.AreaOwner.AreaType;
 import org.apache.hop.core.gui.BasePainter;
 import org.apache.hop.core.gui.CanvasSvgRenderResult;
 import org.apache.hop.core.gui.DPoint;
+import org.apache.hop.core.gui.HopLineShape;
+import org.apache.hop.core.gui.HopPath;
 import org.apache.hop.core.gui.IGc;
 import org.apache.hop.core.gui.IRedrawable;
 import org.apache.hop.core.gui.IUndo;
@@ -112,6 +117,7 @@ import org.apache.hop.metadata.api.IHopMetadataProvider;
 import org.apache.hop.metadata.api.IHopMetadataSerializer;
 import org.apache.hop.metadata.serializer.multi.MultiMetadataProvider;
 import org.apache.hop.pipeline.DatabaseImpact;
+import org.apache.hop.pipeline.Pipeline;
 import org.apache.hop.pipeline.PipelineExecutionConfiguration;
 import org.apache.hop.pipeline.PipelineHopMeta;
 import org.apache.hop.pipeline.PipelineMeta;
@@ -120,6 +126,9 @@ import org.apache.hop.pipeline.PipelinePainter;
 import org.apache.hop.pipeline.TransformCopyCompletion;
 import org.apache.hop.pipeline.canvas.PipelineCanvasSvgRenderer;
 import org.apache.hop.pipeline.config.PipelineRunConfiguration;
+import org.apache.hop.pipeline.debug.DebugController;
+import org.apache.hop.pipeline.debug.DebugSession;
+import org.apache.hop.pipeline.debug.DebugSessionStore;
 import org.apache.hop.pipeline.debug.PipelineDebugMeta;
 import org.apache.hop.pipeline.debug.TransformDebugMeta;
 import org.apache.hop.pipeline.engine.IEngineComponent;
@@ -186,6 +195,10 @@ import org.apache.hop.ui.hopgui.file.pipeline.context.HopGuiPipelineContext;
 import org.apache.hop.ui.hopgui.file.pipeline.context.HopGuiPipelineHopContext;
 import org.apache.hop.ui.hopgui.file.pipeline.context.HopGuiPipelineNoteContext;
 import org.apache.hop.ui.hopgui.file.pipeline.context.HopGuiPipelineTransformContext;
+import org.apache.hop.ui.hopgui.file.pipeline.debug.DebugFailureText;
+import org.apache.hop.ui.hopgui.file.pipeline.debug.DebugSessionUi;
+import org.apache.hop.ui.hopgui.file.pipeline.debug.HopGuiPipelineDebugDelegate;
+import org.apache.hop.ui.hopgui.file.pipeline.debug.config.DebugSessionsConfigPlugin;
 import org.apache.hop.ui.hopgui.file.pipeline.delegates.HopGuiPipelineCheckDelegate;
 import org.apache.hop.ui.hopgui.file.pipeline.delegates.HopGuiPipelineClipboardDelegate;
 import org.apache.hop.ui.hopgui.file.pipeline.delegates.HopGuiPipelineGridDelegate;
@@ -274,6 +287,11 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
         IWebCanvasGraph,
         ISnapshotUndoSupport,
         IGraphPaletteHost {
+  private static final String CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING =
+      "PipelineLog.Dialog.DoNoPreviewWhileRunning.Title";
+  private static final String CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING_MESSAGE =
+      "PipelineLog.Dialog.DoNoPreviewWhileRunning.Message";
+  private static final String CONST_RESIZE_DIRECTION = "resizeDirection";
 
   private static final Class<?> PKG = HopGui.class;
 
@@ -403,11 +421,33 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
    */
   private boolean outputDataPressed;
 
+  /** The press landed on a debug hop pill. The hop is selected on release, not after a drag. */
+  private boolean debugBufferPressed;
+
+  private HopGuiPipelineDebugDelegate debugDelegate;
+
+  /** Set when prepare failed. Load uses it so a busy pipeline is not reported as an init error. */
+  private String debugPrepareFailure;
+
+  /** Bumped each time a debug engine is dropped, so a late Reset cannot start a second session. */
+  private int debugDiscardGeneration;
+
   /**
-   * The output-rows dialog is on screen. It runs its own event loop, which delivers any click made
-   * while it is up; that click must not move transforms or open a second copy of the dialog.
+   * Row buffers whose "Output of" window is currently on screen.
+   *
+   * <p>Opening a preview runs a nested event loop, so the canvas keeps handling clicks while the
+   * window is up. The user can still move a transform or open the rows of another transform; a
+   * second click on a window that is already open is refused.
+   *
+   * <p>An entry is removed when its own window is disposed, not when the opening call returns: with
+   * several windows the first call only returns once the newest window has closed, see {@link
+   * #showOutputDataDialog}.
+   *
+   * <p>Buffers are tracked by identity rather than with a single boolean flag, because windows for
+   * several transforms can be open at once. {@link RowBuffer#equals} compares row values.
    */
-  private boolean showingOutputRows;
+  private final Set<RowBuffer> openOutputRowsBuffers =
+      Collections.newSetFromMap(new IdentityHashMap<>());
 
   /**
    * Display filters used while placing a transform dragged from the context dialog (issue #3111).
@@ -462,7 +502,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   private final SashForm paletteSash;
 
-  private GraphPaletteTree paletteTree;
+  private final GraphPaletteTree paletteTree;
 
   private final SashForm sashForm;
 
@@ -761,6 +801,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   @Override
   public void dispose() {
+    releaseDebugEngine();
     hopGui.getEventsHandler().removeEventListeners(paletteListenerId());
     if (EnvironmentUtils.getInstance().isWeb() && canvas != null && !canvas.isDisposed()) {
       CanvasSvgFacade.unregisterCanvas(canvas);
@@ -791,10 +832,6 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   @Override
   public void mouseDoubleClick(MouseEvent event) {
-    if (showingOutputRows) {
-      return;
-    }
-
     if (!PropsUi.getInstance().useDoubleClick()) {
       return;
     }
@@ -859,9 +896,6 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   @Override
   public void mouseDown(MouseEvent event) {
-    if (showingOutputRows) {
-      return;
-    }
     if (EnvironmentUtils.getInstance().isWeb()) {
       // RAP does not support certain mouse events.
       mouseHover(event);
@@ -884,6 +918,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     dragSelection = false;
     iconDragStartScreen = null;
     outputDataPressed = false;
+    debugBufferPressed = false;
 
     // Hide the tooltip!
     hideToolTips();
@@ -999,6 +1034,16 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
           // cannot finish a move and open the rows.
           //
           outputDataPressed = true;
+          currentTransform = null;
+          selectedTransform = null;
+          iconDragStartScreen = null;
+          iconDragCommitted = false;
+          dragSelection = false;
+          done = true;
+          break;
+
+        case HOP_DEBUG_BUFFER:
+          debugBufferPressed = true;
           currentTransform = null;
           selectedTransform = null;
           iconDragStartScreen = null;
@@ -1171,7 +1216,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
           if (EnvironmentUtils.getInstance().isWeb()) {
             if (resize != null) {
               canvas.setData("mode", "resize");
-              canvas.setData("resizeDirection", resize.name());
+              canvas.setData(CONST_RESIZE_DIRECTION, resize.name());
             } else {
               canvas.setData("mode", "drag");
               dragSelection = true;
@@ -1239,13 +1284,12 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   @Override
   public void mouseUp(MouseEvent e) {
-    if (showingOutputRows) {
-      return;
-    }
     // A preview badge opens its rows only for the press that landed on it. Cleared before any
     // return below, including the ones that finish a drag.
     boolean previewPress = outputDataPressed && e.button == 1;
+    boolean debugPress = debugBufferPressed && e.button == 1;
     outputDataPressed = false;
+    debugBufferPressed = false;
 
     // Track if we just completed a resize operation
     boolean wasResizing = false;
@@ -1265,7 +1309,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     if (startHopTransform == null && endHopTransform == null) {
       canvas.setData("mode", "null");
       canvas.setData(START_HOP_NODE, null);
-      canvas.setData("resizeDirection", null);
+      canvas.setData(CONST_RESIZE_DIRECTION, null);
     }
 
     // Don't call mouseMove after a resize - it would trigger unwanted drag logic
@@ -1384,6 +1428,12 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
           //
           if (previewPress && opensPreviewRows(e)) {
             showPreviewRows(areaOwner);
+            return;
+          }
+          break;
+        case HOP_DEBUG_BUFFER:
+          if (debugPress && opensPreviewRows(e)) {
+            openDebugBuffer(areaOwner);
             return;
           }
           break;
@@ -1701,7 +1751,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     avoidContextDialog = false;
     canvas.setData("mode", "null");
     canvas.setData(START_HOP_NODE, null);
-    canvas.setData("resizeDirection", null);
+    canvas.setData(CONST_RESIZE_DIRECTION, null);
     resetPositionUndoMark();
   }
 
@@ -1754,76 +1804,127 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     if (rowBuffer == null) {
       return false;
     }
-    // Already inside this dialog's event loop: the click that got us here is not another preview.
-    if (showingOutputRows) {
+    // Already inside this buffer's dialog event loop: the click that got us here is not another
+    // preview of the same rows. A preview of another transform is a new request, and does open.
+    if (openOutputRowsBuffers.contains(rowBuffer)) {
       return true;
     }
+    // A running pipeline appends its sampled rows to this list from its own threads, under the
+    // list's lock. Copy the rows inside that lock and release it before the window opens.
+    final IRowMeta rowMeta;
+    final List<Object[]> rows;
     synchronized (rowBuffer.getBuffer()) {
-      if (!rowBuffer.isEmpty()) {
-        showingOutputRows = true;
-        try {
-          String title =
-              BaseMessages.getString(
-                  PKG, "PipelineGraph.ViewOutput.OutputDialog.Header", titleName);
-          String message =
-              BaseMessages.getString(
-                  PKG, "PipelineGraph.ViewOutput.OutputDialog.OutputRows.Text", messageName);
-          String prefix = "";
+      if (rowBuffer.isEmpty()) {
+        return true;
+      }
+      rowMeta = rowBuffer.getRowMeta();
+      rows = new ArrayList<>(rowBuffer.getBuffer());
+    }
 
-          if (pipeline != null && pipeline.getPipelineRunConfiguration() != null) {
-            PipelineRunConfiguration pipelineRunConfiguration =
-                pipeline.getPipelineRunConfiguration();
-            if (pipelineRunConfiguration.getEngineRunConfiguration()
-                instanceof LocalPipelineRunConfiguration localPipelineRunConfiguration) {
-              String sampleTypeInGui = localPipelineRunConfiguration.getSampleTypeInGui();
-              if (StringUtils.isNotEmpty(sampleTypeInGui)) {
-                try {
-                  SampleType sampleType = SampleType.valueOf(sampleTypeInGui);
-                  switch (sampleType) {
-                    case None:
-                      break;
-                    case First:
-                      prefix =
-                          BaseMessages.getString(
-                              PKG, "PipelineGraph.ViewOutput.OutputDialog.First.Text");
-                      break;
-                    case Last:
-                      prefix =
-                          BaseMessages.getString(
-                              PKG, "PipelineGraph.ViewOutput.OutputDialog.Last.Text");
-                      break;
-                    case Random:
-                      prefix +=
-                          BaseMessages.getString(
-                              PKG, "PipelineGraph.ViewOutput.OutputDialog.Random.Text");
-                      break;
-                    default:
-                      break;
-                  }
-                } catch (Exception ex) {
-                  LogChannel.UI.logError("Unknown sample type: " + sampleTypeInGui);
-                }
+    openOutputRowsBuffers.add(rowBuffer);
+    // Every window runs its own event loop, so a window opened from within the first one's loop
+    // nests inside it: open() returns when the newest window closes, not when this one does.
+    // Releasing the buffer from this window's own dispose event keeps the mark tied to the window
+    // on screen. The flag makes the release happen once, so a late return cannot clear a window
+    // that was reopened in the meantime.
+    final AtomicBoolean released = new AtomicBoolean();
+    final Runnable release =
+        () -> {
+          if (released.compareAndSet(false, true)) {
+            openOutputRowsBuffers.remove(rowBuffer);
+          }
+        };
+    try {
+      String title =
+          BaseMessages.getString(PKG, "PipelineGraph.ViewOutput.OutputDialog.Header", titleName);
+      String message =
+          BaseMessages.getString(
+              PKG, "PipelineGraph.ViewOutput.OutputDialog.OutputRows.Text", messageName);
+      String prefix = "";
+
+      if (pipeline != null && pipeline.getPipelineRunConfiguration() != null) {
+        PipelineRunConfiguration pipelineRunConfiguration = pipeline.getPipelineRunConfiguration();
+        if (pipelineRunConfiguration.getEngineRunConfiguration()
+            instanceof LocalPipelineRunConfiguration localPipelineRunConfiguration) {
+          String sampleTypeInGui = localPipelineRunConfiguration.getSampleTypeInGui();
+          if (StringUtils.isNotEmpty(sampleTypeInGui)) {
+            try {
+              SampleType sampleType = SampleType.valueOf(sampleTypeInGui);
+              switch (sampleType) {
+                case None:
+                  break;
+                case First:
+                  prefix =
+                      BaseMessages.getString(
+                          PKG, "PipelineGraph.ViewOutput.OutputDialog.First.Text");
+                  break;
+                case Last:
+                  prefix =
+                      BaseMessages.getString(
+                          PKG, "PipelineGraph.ViewOutput.OutputDialog.Last.Text");
+                  break;
+                case Random:
+                  prefix +=
+                      BaseMessages.getString(
+                          PKG, "PipelineGraph.ViewOutput.OutputDialog.Random.Text");
+                  break;
+                default:
+                  break;
               }
+            } catch (Exception ex) {
+              LogChannel.UI.logError("Unknown sample type: " + sampleTypeInGui);
             }
           }
-
-          new ShowRowsDialog(
-                  hopGui.getActiveShell(),
-                  variables,
-                  title,
-                  prefix + message,
-                  rowBuffer.getRowMeta(),
-                  rowBuffer.getBuffer())
-              .open();
-        } catch (Exception ex) {
-          new ErrorDialog(
-              hopGui.getActiveShell(), CONST_ERROR, "Error showing output rows dialog", ex);
-        } finally {
-          showingOutputRows = false;
         }
       }
+
+      watchOutputRowsShell(title, release);
+      new ShowRowsDialog(hopGui.getActiveShell(), variables, title, prefix + message, rowMeta, rows)
+          .open();
+    } catch (Exception ex) {
+      new ErrorDialog(hopGui.getActiveShell(), CONST_ERROR, "Error showing output rows dialog", ex);
+    } finally {
+      release.run();
     }
     return true;
+  }
+
+  /**
+   * Calls {@code onDisposed} when the window {@link ShowRowsDialog} is about to open is disposed,
+   * and brings that window to the front.
+   *
+   * <p>The window creates its shell privately, and {@code open()} does not return until a nested
+   * event loop ends - which, with several windows stacked, is when the newest one closes. So the
+   * shell is found once it exists: the shell is built before its loop starts, and the runnable
+   * posted here is the first thing that loop dispatches. It is identified by its title among the
+   * shells that did not exist before.
+   *
+   * <p>A window opened while another one runs the event loop is not activated by the platform, and
+   * both size themselves from the same saved position, so without raising it here the new window
+   * appears behind the one that still has the focus.
+   *
+   * <p>This lookup relies on {@link ShowRowsDialog} setting the title as the shell text.
+   */
+  private void watchOutputRowsShell(String title, Runnable onDisposed) {
+    Shell parent = hopGui.getActiveShell();
+    Display display = parent == null ? null : parent.getDisplay();
+    if (display == null) {
+      return;
+    }
+    Set<Shell> shellsBefore = new HashSet<>(Arrays.asList(display.getShells()));
+    display.asyncExec(
+        () -> {
+          for (Shell candidate : display.getShells()) {
+            if (!shellsBefore.contains(candidate)
+                && !candidate.isDisposed()
+                && title.equals(candidate.getText())) {
+              candidate.addDisposeListener(e -> onDisposed.run());
+              candidate.setActive();
+              candidate.forceActive();
+              return;
+            }
+          }
+        });
   }
 
   /**
@@ -1956,9 +2057,6 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
   private void menuDetect(Event event) {
     // No SWT menu hangs off the canvas, and in Hop Web the browser's own menu is unwanted.
     event.doit = false;
-    if (showingOutputRows) {
-      return;
-    }
     if (!PropsUi.getInstance().useRightClickForContextDialog()) {
       return;
     }
@@ -2646,9 +2744,6 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   @Override
   public void mouseMove(MouseEvent event) {
-    if (showingOutputRows) {
-      return;
-    }
     boolean shift = (event.stateMask & SWT.SHIFT) != 0;
     boolean doRedraw = false;
 
@@ -3630,6 +3725,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     iconDragStartScreen = null;
     iconDragCommitted = false;
     outputDataPressed = false;
+    debugBufferPressed = false;
     canvas.setData("mode", "null");
     canvas.setData(START_HOP_NODE, null);
     startHopTransform = null;
@@ -5290,8 +5386,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
     // Do double buffering to prevent flickering on Windows
     //
-    boolean needsDoubleBuffering =
-        Const.isWindows() && "GUI".equalsIgnoreCase(Const.getHopPlatformRuntime());
+    boolean needsDoubleBuffering = Const.isWindows() && Const.isGuiRuntime();
 
     Image image = null;
     GC swtGc = e.gc;
@@ -5545,6 +5640,10 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
   }
 
   private boolean pointOnLine(int x, int y, int[] line) {
+    if (HopLineShape.getConfigured() == HopLineShape.CURVED) {
+      HopPath path = HopPath.curved(line[0], line[1], line[2], line[3], iconSize, true, true);
+      return path.distanceTo(x, y) <= HOP_SEL_MARGIN / 2.0 + 1;
+    }
     int dx;
     int dy;
     int pm = HOP_SEL_MARGIN / 2;
@@ -5601,6 +5700,19 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
           pipelineRunDelegate.getPipelinePreviewDebugExecutionConfiguration().getLogLevel());
     } catch (Exception e) {
       new ErrorDialog(hopShell(), CONST_ERROR, CONST_ERROR_PREVIEWING_PIPELINE, e);
+    }
+  }
+
+  @GuiToolbarElement(
+      root = GUI_PLUGIN_TOOLBAR_PARENT_ID,
+      id = "HopGuiPipelineGraph-ToolBar-10055-Debug",
+      toolTip = "i18n::PipelineGraph.Toolbar.Debug.Tooltip",
+      image = "ui/images/debug.svg")
+  public void debugPipeline() {
+    if (isDebugSession()) {
+      exitDebugMode();
+    } else {
+      startDebugSession();
     }
   }
 
@@ -5892,23 +6004,36 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
           && (pipeline.isRunning() || pipeline.isPaused())
           && pipeline.getParentPipeline() == null
           && pipeline.getParentWorkflow() == null) {
-        MessageBox messageDialog =
-            new MessageBox(hopShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO | SWT.CANCEL);
-        messageDialog.setText(
-            BaseMessages.getString(PKG, "PipelineGraph.RunningFile.Dialog.Header"));
-        messageDialog.setMessage(
-            BaseMessages.getString(
-                PKG, "PipelineGraph.RunningFile.Dialog.Message", buildTabName()));
-        int answer = messageDialog.open();
-        // The NO answer means: ignore the state of the pipeline and just let it run in the
-        // background
-        // It can be seen in the execution information perspective if a location was set up.
-        //
-        if ((answer & SWT.YES) != 0) {
-          // Stop the execution and close if the file hasn't been changed
-          pipeline.stopAll();
-        } else if ((answer & SWT.CANCEL) != 0) {
-          return false;
+        if (isDebugSession()) {
+          MessageBox messageDialog =
+              new MessageBox(hopShell(), SWT.ICON_QUESTION | SWT.YES | SWT.CANCEL);
+          messageDialog.setText(BaseMessages.getString(PKG, "PipelineGraph.Debug.Close.Header"));
+          messageDialog.setMessage(
+              BaseMessages.getString(PKG, "PipelineGraph.Debug.Close.Message", buildTabName()));
+          int answer = messageDialog.open();
+          if ((answer & SWT.YES) == 0) {
+            return false;
+          }
+          releaseDebugEngine();
+        } else {
+          MessageBox messageDialog =
+              new MessageBox(hopShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO | SWT.CANCEL);
+          messageDialog.setText(
+              BaseMessages.getString(PKG, "PipelineGraph.RunningFile.Dialog.Header"));
+          messageDialog.setMessage(
+              BaseMessages.getString(
+                  PKG, "PipelineGraph.RunningFile.Dialog.Message", buildTabName()));
+          int answer = messageDialog.open();
+          // The NO answer means: ignore the state of the pipeline and just let it run in the
+          // background
+          // It can be seen in the execution information perspective if a location was set up.
+          //
+          if ((answer & SWT.YES) != 0) {
+            // Stop the execution and close if the file hasn't been changed
+            pipeline.stopAll();
+          } else if ((answer & SWT.CANCEL) != 0) {
+            return false;
+          }
         }
       }
       if (pipelineMeta.hasChanged()) {
@@ -6001,6 +6126,38 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
   @Override
   public void resume() {
     pauseResume();
+  }
+
+  @GuiKeyboardShortcut(key = SWT.F10)
+  @GuiOsxKeyboardShortcut(key = SWT.F6)
+  public void debugProcessOne() {
+    if (debugDelegate != null) {
+      debugDelegate.processOne();
+    }
+  }
+
+  @GuiKeyboardShortcut(key = SWT.F11)
+  @GuiOsxKeyboardShortcut(key = SWT.F9)
+  public void debugContinue() {
+    if (debugDelegate != null) {
+      debugDelegate.continueRunning();
+    }
+  }
+
+  @GuiKeyboardShortcut(shift = true, key = SWT.F11)
+  @GuiOsxKeyboardShortcut(shift = true, key = SWT.F9)
+  public void debugPause() {
+    if (debugDelegate != null) {
+      debugDelegate.pauseRunning();
+    }
+  }
+
+  @GuiKeyboardShortcut(control = true, key = SWT.F2)
+  @GuiOsxKeyboardShortcut(command = true, key = SWT.F2)
+  public void debugStop() {
+    if (isDebugSession()) {
+      exitDebugMode();
+    }
   }
 
   @GuiToolbarElement(
@@ -6294,6 +6451,12 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
   public synchronized void start(PipelineExecutionConfiguration executionConfiguration)
       throws HopException {
+    if (isDebugSession()) {
+      releaseDebugEngine();
+    }
+    if (stateMap != null) {
+      stateMap.remove(DebugController.STATE_CURRENT_TRANSFORM);
+    }
 
     // If filename set & not changed ?
     //
@@ -6449,6 +6612,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
 
     stopRedrawTimer();
     checkErrorVisuals();
+    refreshDebugPanel();
     updateGui();
   }
 
@@ -6458,13 +6622,14 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
             PKG, "PipelineLog.Log.ProcessingOfPipelineStopped", pipelineMeta.getName()));
     stopRedrawTimer();
     checkErrorVisuals();
+    refreshDebugPanel();
     updateGui();
   }
 
   private void addRowsSamplerToPipeline(IPipelineEngine<PipelineMeta> pipeline) {
     try {
-      outputRowsMap = new HashMap<>();
-      outputHopRowsMap = new HashMap<>();
+      outputRowsMap = new ConcurrentHashMap<>();
+      outputHopRowsMap = new ConcurrentHashMap<>();
       PipelineRowSamplerHelper.addRowSamplersToPipeline(pipeline, outputRowsMap, outputHopRowsMap);
     } catch (Exception e) {
       // Ignore: run config not local or sample type not set
@@ -6480,8 +6645,8 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     if (pipeline == null) {
       return;
     }
-    outputRowsMap = new HashMap<>();
-    outputHopRowsMap = new HashMap<>();
+    outputRowsMap = new ConcurrentHashMap<>();
+    outputHopRowsMap = new ConcurrentHashMap<>();
     PipelineRowSamplerHelper.addRowSamplersToPipeline(pipeline, outputRowsMap, outputHopRowsMap);
   }
 
@@ -6508,6 +6673,322 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
         TOOLBAR_ITEM_SHOW_EXECUTION_RESULTS,
         BaseMessages.getString(PKG, "HopGui.Tooltip.HideExecutionResults"));
     hopGui.refreshSidebarToolbarButtonStates();
+  }
+
+  /**
+   * Starts a local debug session. Transforms stay parked until the debugger grants a row. Beam,
+   * Spark, and remote engines are not used: this always runs on {@link LocalPipelineEngine}.
+   */
+  public synchronized void startDebugSession() {
+    try {
+      if (!prepareDebugEngine()) {
+        return;
+      }
+      showDebugTab();
+      startThreads();
+      if (debugDelegate != null) {
+        debugDelegate.refresh();
+      }
+    } catch (Exception e) {
+      showDebugPrepareFailure(e);
+    }
+  }
+
+  /** Leaves debug mode and returns the canvas to the pipeline editor. */
+  public void exitDebugMode() {
+    discardDebugEngine(null);
+  }
+
+  /** Drops the current debug run and starts a new one at the first row. */
+  public void resetDebugSession() {
+    discardDebugEngine(this::startDebugSession);
+  }
+
+  private boolean isDebugSession() {
+    return pipeline instanceof Pipeline local && local.getDebugController() != null;
+  }
+
+  /** Stops a debug engine, if one is on the canvas, and returns it so the caller can clean up. */
+  private Pipeline stopDebugEngine() {
+    Pipeline stopping = null;
+    if (pipeline instanceof Pipeline local && local.getDebugController() != null) {
+      stopping = local;
+      try {
+        local.getDebugController().cancelWaiters();
+      } catch (Exception ignored) {
+        // The session is being dropped.
+      }
+      if (!local.isFinished() && !local.isStopped()) {
+        local.stopAll();
+      }
+    }
+    if (stateMap != null) {
+      stateMap.remove(DebugController.STATE_CURRENT_TRANSFORM);
+    }
+    return stopping;
+  }
+
+  private static void cleanupDebugEngine(Pipeline engine) {
+    try {
+      engine.waitUntilFinished();
+    } catch (Exception ignored) {
+      // The engine is already off the canvas.
+    }
+    try {
+      engine.cleanup();
+    } catch (Exception ignored) {
+      // Spill files are best-effort. deleteOnExit covers a crash.
+    }
+  }
+
+  /** Stops the debug engine and deletes its spill files off the UI thread. */
+  private void releaseDebugEngine() {
+    Pipeline stopping = stopDebugEngine();
+    if (stopping == null) {
+      return;
+    }
+    Pipeline engine = stopping;
+    Thread stopper = new Thread(() -> cleanupDebugEngine(engine), "Hop debug cleanup");
+    stopper.setDaemon(true);
+    stopper.start();
+  }
+
+  public DebugSessionUi debugSessionUi() {
+    return new DebugSessionUi() {
+      @Override
+      public String sessionsRoot() {
+        return DebugSessionsConfigPlugin.resolveRoot(getVariables());
+      }
+
+      @Override
+      public String projectName() {
+        return blankToDefault(getVariables().getVariable("HOP_PROJECT_NAME"));
+      }
+
+      @Override
+      public String environmentName() {
+        return blankToDefault(getVariables().getVariable("HOP_ENVIRONMENT_NAME"));
+      }
+
+      @Override
+      public String pipelineName() {
+        return pipelineMeta == null ? "pipeline" : pipelineMeta.getName();
+      }
+
+      @Override
+      public String pipelineFilename() {
+        return pipelineMeta == null ? null : pipelineMeta.getFilename();
+      }
+
+      @Override
+      public String pipelineHash() {
+        return DebugSessionStore.pipelineHash(pipelineMeta);
+      }
+
+      @Override
+      public void loadSession(DebugSession session) throws HopException {
+        loadDebugSession(session);
+      }
+    };
+  }
+
+  private static String blankToDefault(String value) {
+    if (value == null || value.isBlank()) {
+      return "default";
+    }
+    return value;
+  }
+
+  /**
+   * Takes the debug engine off the canvas immediately. Waiting for its threads and deleting spill
+   * files happens off the UI thread, so Reset does not freeze Hop.
+   */
+  private void discardDebugEngine(Runnable onUiWhenStopped) {
+    int generation = ++debugDiscardGeneration;
+    Pipeline stopping = stopDebugEngine();
+    stopRedrawTimer();
+    setDisplayedPipeline(null);
+    if (debugDelegate != null) {
+      debugDelegate.refresh();
+    }
+    updateGui();
+    redraw();
+    if (stopping == null) {
+      if (onUiWhenStopped != null) {
+        onUiWhenStopped.run();
+      }
+      return;
+    }
+    Pipeline engine = stopping;
+    Display display = hopDisplay();
+    Thread stopper =
+        new Thread(
+            () -> {
+              cleanupDebugEngine(engine);
+              if (display == null || display.isDisposed() || onUiWhenStopped == null) {
+                return;
+              }
+              display.asyncExec(
+                  () -> {
+                    if (!display.isDisposed() && generation == debugDiscardGeneration) {
+                      onUiWhenStopped.run();
+                    }
+                  });
+            },
+            "Hop debug reset");
+    stopper.setDaemon(true);
+    stopper.start();
+  }
+
+  /**
+   * Replaces the current debug run with the rows and cursors in {@code session}. Transforms stay
+   * parked. {@code init()} runs again; open files and database transactions are not restored.
+   */
+  public synchronized void loadDebugSession(DebugSession session) throws HopException {
+    if (!prepareDebugEngine()) {
+      throw new HopException(
+          debugPrepareFailure == null
+              ? BaseMessages.getString(PKG, "PipelineGraph.Debug.AlreadyRunning")
+              : debugPrepareFailure);
+    }
+    try {
+      if (pipeline instanceof Pipeline local) {
+        DebugSessionStore.apply(local, session);
+      }
+      showDebugTab();
+      startThreads();
+    } catch (Exception e) {
+      throw new HopException(showDebugPrepareFailure(e), e);
+    }
+  }
+
+  private boolean prepareDebugEngine() throws HopException {
+    debugPrepareFailure = null;
+    if (isRunning() && !isDebugSession()) {
+      modalMessageDialog(
+          BaseMessages.getString(PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING),
+          BaseMessages.getString(
+              PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING_MESSAGE),
+          SWT.OK | SWT.ICON_WARNING);
+      return false;
+    }
+    if (isDebugSession()) {
+      releaseDebugEngine();
+    }
+    outputRowsMap = new HashMap<>();
+    outputHopRowsMap = new HashMap<>();
+    if (isRunning()) {
+      modalMessageDialog(
+          BaseMessages.getString(PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING),
+          BaseMessages.getString(
+              PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING_MESSAGE),
+          SWT.OK | SWT.ICON_WARNING);
+      return false;
+    }
+    if (pipeline != null) {
+      DrillDownGuiPlugin.cleanupOnRunStart(hopGui.getId());
+      HopLogStore.discardLines(pipeline.getLogChannelId(), false);
+      LoggingRegistry.getInstance().removeIncludingChildren(pipeline.getLogChannelId());
+    }
+    pipelineMeta.clearCaches();
+    LocalPipelineEngine engine =
+        new LocalPipelineEngine(pipelineMeta, variables, hopGui.getLoggingObject());
+    engine.setDebugController(new DebugController(engine));
+    engine.setMetadataProvider(hopGui.getMetadataProvider());
+    setDisplayedPipeline(engine);
+    DrillDownGuiPlugin.bindToHopGui(pipeline, hopGui.getId());
+    pipeline.copyParametersFromDefinitions(pipelineMeta);
+    try {
+      ExtensionPointHandler.callExtensionPoint(
+          log, variables, HopExtensionPoint.HopGuiPipelineBeforeStart.id, pipeline);
+    } catch (HopException e) {
+      log.logError(e.getMessage(), pipelineMeta.getFilename());
+    }
+    try {
+      pipeline.prepareExecution();
+    } catch (HopException e) {
+      debugPrepareFailure = showDebugPrepareFailure(e);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Shows the transform's own error and the logging tab. Does not open {@link ErrorDialog}: that
+   * dialog prints the stack of the generic "failed to initialize" exception.
+   */
+  private String showDebugPrepareFailure(Exception error) {
+    if (pipeline instanceof Pipeline local) {
+      try {
+        local.cleanup();
+      } catch (Exception ignored) {
+        // The initialization error is the one to show.
+      }
+      local.setDebugController(null);
+    }
+    String logText = null;
+    if (pipeline != null) {
+      StringBuffer buffer = HopLogStore.getAppender().getBuffer(pipeline.getLogChannelId(), true);
+      if (buffer != null) {
+        logText = buffer.toString();
+      }
+    }
+    String details = DebugFailureText.fromLog(logText, Const.getRootCauseMessage(error));
+    addAllTabs();
+    if (pipelineLogDelegate.getLogBrowser() != null) {
+      pipelineLogDelegate.getLogBrowser().resetLogChannels();
+    }
+    if (extraViewTabFolder != null
+        && pipelineLogDelegate.getPipelineLogTab() != null
+        && !pipelineLogDelegate.getPipelineLogTab().isDisposed()) {
+      extraViewTabFolder.setSelection(pipelineLogDelegate.getPipelineLogTab());
+    }
+    checkErrorVisuals();
+    modalMessageDialog(
+        BaseMessages.getString(PKG, "PipelineLog.Dialog.DebugPrepareFailed.Title"),
+        BaseMessages.getString(PKG, "PipelineLog.Dialog.DebugPrepareFailed.Message")
+            + Const.CR
+            + Const.CR
+            + details,
+        SWT.OK | SWT.ICON_ERROR);
+    return details;
+  }
+
+  private void showDebugTab() {
+    addAllTabs();
+    selectExtraTab(HopGuiPipelineDebugDelegate.TAB_ID);
+  }
+
+  public void setDebugDelegate(HopGuiPipelineDebugDelegate debugDelegate) {
+    this.debugDelegate = debugDelegate;
+  }
+
+  public void selectExtraTab(String tabId) {
+    if (extraViewTabFolder == null || extraViewTabFolder.isDisposed()) {
+      return;
+    }
+    for (CTabItem item : extraViewTabFolder.getItems()) {
+      if (tabId.equals(item.getData(EXTRA_TAB_ID))) {
+        extraViewTabFolder.setSelection(item);
+        return;
+      }
+    }
+  }
+
+  private void openDebugBuffer(AreaOwner areaOwner) {
+    if (!(areaOwner.getParent() instanceof PipelineHopMeta hop)
+        || hop.getFromTransform() == null
+        || hop.getToTransform() == null) {
+      return;
+    }
+    if (!isExecutionResultsPaneVisible()) {
+      addAllTabs();
+    }
+    selectExtraTab(HopGuiPipelineDebugDelegate.TAB_ID);
+    if (debugDelegate != null) {
+      debugDelegate.selectHop(hop.getFromTransform().getName(), hop.getToTransform().getName());
+    }
+    redraw();
   }
 
   public synchronized void debug(
@@ -6607,8 +7088,9 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
       }
     } else {
       modalMessageDialog(
-          BaseMessages.getString(PKG, "PipelineLog.Dialog.DoNoPreviewWhileRunning.Title"),
-          BaseMessages.getString(PKG, "PipelineLog.Dialog.DoNoPreviewWhileRunning.Message"),
+          BaseMessages.getString(PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING),
+          BaseMessages.getString(
+              PKG, CONST_PIPELINE_LOG_DIALOG_DO_NO_PREVIEW_WHILE_RUNNING_MESSAGE),
           SWT.OK | SWT.ICON_WARNING);
     }
     checkErrorVisuals();
@@ -6670,6 +7152,10 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
       image = "ui/images/stop.svg")
   @Override
   public void stop() {
+    if (isDebugSession()) {
+      exitDebugMode();
+      return;
+    }
     if (safeStopping) {
       modalMessageDialog(
           BaseMessages.getString(PKG, "PipelineLog.Log.SafeStopAlreadyStarted.Title"),
@@ -6873,6 +7359,9 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
                         && HopGuiPipelineGraph.this.isVisible()) {
                       HopGuiPipelineGraph.this.canvas.redraw();
                       HopGuiPipelineGraph.this.updateGui();
+                      if (debugDelegate != null) {
+                        debugDelegate.refresh();
+                      }
                     }
                   });
         });
@@ -6913,6 +7402,7 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     }
     checkPipelineEnded();
     checkErrorVisuals();
+    refreshDebugPanel();
     executionGuiSession.stopIfCurrent(finished, this::stopRedrawTimer);
   }
 
@@ -6922,6 +7412,23 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     }
     checkErrorVisuals();
     executionGuiSession.stopIfCurrent(engine, this::stopRedrawTimer);
+  }
+
+  /**
+   * Copies the live hop and transform counts into the debugger tables. Callers include engine
+   * threads (finished/stopped listeners), so the widget work always runs on the display thread.
+   */
+  private void refreshDebugPanel() {
+    if (debugDelegate == null || !isUiAlive()) {
+      return;
+    }
+    hopDisplay()
+        .asyncExec(
+            () -> {
+              if (isUiAlive() && debugDelegate != null) {
+                debugDelegate.refresh();
+              }
+            });
   }
 
   protected void stopRedrawTimer() {
@@ -7419,6 +7926,14 @@ public class HopGuiPipelineGraph extends HopGuiAbstractGraph
     hopDisplay()
         .asyncExec(
             () -> {
+              // The checks above can go stale: this runnable also runs during Display.dispose().
+              if (!isUiAlive()
+                  || toolBarWidgets == null
+                  || toolBar == null
+                  || toolBar.isDisposed()) {
+                return;
+              }
+
               setZoomLabel();
 
               // Enable/disable the undo/redo toolbar buttons...

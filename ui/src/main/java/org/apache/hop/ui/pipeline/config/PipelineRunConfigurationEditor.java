@@ -32,10 +32,12 @@ import org.apache.hop.core.variables.DescribedVariable;
 import org.apache.hop.execution.ExecutionInfoLocation;
 import org.apache.hop.execution.profiling.ExecutionDataProfile;
 import org.apache.hop.i18n.BaseMessages;
+import org.apache.hop.lineage.metadata.LineageSink;
 import org.apache.hop.pipeline.config.IPipelineEngineRunConfiguration;
 import org.apache.hop.pipeline.config.PipelineRunConfiguration;
 import org.apache.hop.pipeline.engine.IPipelineEngine;
 import org.apache.hop.pipeline.engine.PipelineEnginePluginType;
+import org.apache.hop.pipeline.engines.local.LocalPipelineRunConfiguration;
 import org.apache.hop.server.loadbalance.ILoadBalancingRunConfiguration;
 import org.apache.hop.ui.core.PropsUi;
 import org.apache.hop.ui.core.dialog.ErrorDialog;
@@ -85,6 +87,7 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
   private Button wDefault;
   private MetaSelectionLine<ExecutionInfoLocation> wExecutionInfoLocation;
   private MetaSelectionLine<ExecutionDataProfile> wProfile;
+  private MetaSelectionLine<LineageSink> wLineageSink;
   private ComboVar wPluginType;
 
   private Composite wPluginSpecificComp;
@@ -261,6 +264,24 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     wProfile.setLayoutData(fdProfile);
     lastControl = wProfile;
 
+    // Which lineage sink do the runs report their lineage to?
+    //
+    wLineageSink =
+        new MetaSelectionLine<>(
+            manager.getVariables(),
+            manager.getMetadataProvider(),
+            LineageSink.class,
+            wMainComp,
+            SWT.SINGLE | SWT.LEFT | SWT.BORDER,
+            BaseMessages.getString(PKG, "PipelineRunConfigurationDialog.label.LineageSink"),
+            BaseMessages.getString(PKG, "PipelineRunConfigurationDialog.toolTip.LineageSink"));
+    FormData fdLineageSink = new FormData();
+    fdLineageSink.top = new FormAttachment(lastControl, margin);
+    fdLineageSink.left = new FormAttachment(0, 0);
+    fdLineageSink.right = new FormAttachment(100, 0);
+    wLineageSink.setLayoutData(fdLineageSink);
+    lastControl = wLineageSink;
+
     // What's the type of engine?
     //
     Label wlPluginType = new Label(wMainComp, SWT.RIGHT);
@@ -413,6 +434,8 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     wPluginType.addListener(SWT.Modify, e -> changeConnectionType());
     wProfile.getComboWidget().addListener(SWT.Modify, modifyListener);
     wProfile.getComboWidget().addListener(SWT.Selection, modifyListener);
+    wLineageSink.getComboWidget().addListener(SWT.Modify, modifyListener);
+    wLineageSink.getComboWidget().addListener(SWT.Selection, modifyListener);
     wExecutionInfoLocation.getComboWidget().addListener(SWT.Modify, modifyListener);
     wExecutionInfoLocation.getComboWidget().addListener(SWT.Selection, modifyListener);
   }
@@ -447,6 +470,9 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
             @Override
             public void widgetModified(
                 GuiCompositeWidgets compositeWidgets, Control changedWidget, String widgetId) {
+              if (LocalPipelineRunConfiguration.WIDGET_ID_LOCK_FREE_ROWSETS.equals(widgetId)) {
+                enableLocalEngineWidgets();
+              }
               setChanged();
             }
           });
@@ -481,6 +507,7 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
                     engine,
                     wPluginSpecificComp,
                     PipelineRunConfiguration.GUI_PLUGIN_ELEMENT_PARENT_ID);
+                enableLocalEngineWidgets();
                 wPluginSpecificComp.layout(true, true);
                 updatePluginSpecificMinSize();
               }
@@ -491,11 +518,38 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     updatePluginSpecificMinSize();
   }
 
+  /** The local engine does not use the wait time for buffer checks with lock-free row sets. */
+  private void enableLocalEngineWidgets() {
+    if (guiCompositeWidgets == null
+        || !(workingConfiguration.getEngineRunConfiguration()
+            instanceof LocalPipelineRunConfiguration)) {
+      return;
+    }
+    Control lockFree =
+        guiCompositeWidgets
+            .getWidgetsMap()
+            .get(LocalPipelineRunConfiguration.WIDGET_ID_LOCK_FREE_ROWSETS);
+    if (!(lockFree instanceof Button button) || button.isDisposed()) {
+      return;
+    }
+    boolean enabled = !button.getSelection();
+    Control waitTime =
+        guiCompositeWidgets.getWidgetsMap().get(LocalPipelineRunConfiguration.WIDGET_ID_WAIT_TIME);
+    if (waitTime != null && !waitTime.isDisposed()) {
+      waitTime.setEnabled(enabled);
+    }
+    Control waitTimeLabel =
+        guiCompositeWidgets.getLabelsMap().get(LocalPipelineRunConfiguration.WIDGET_ID_WAIT_TIME);
+    if (waitTimeLabel != null && !waitTimeLabel.isDisposed()) {
+      waitTimeLabel.setEnabled(enabled);
+    }
+  }
+
   private void updatePluginSpecificMinSize() {
     GuiCompositeWidgets.updateScrolledMinSize(wPluginSpecificComp);
   }
 
-  private AtomicBoolean busyChangingPluginType = new AtomicBoolean(false);
+  private final AtomicBoolean busyChangingPluginType = new AtomicBoolean(false);
 
   private void changeConnectionType() {
 
@@ -547,6 +601,7 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     try {
       wExecutionInfoLocation.fillItems();
       wProfile.fillItems();
+      wLineageSink.fillItems();
       if (loadBalancingWidgets != null) {
         loadBalancingWidgets.refreshServerNames();
       }
@@ -585,6 +640,7 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
             workingConfiguration.getEngineRunConfiguration(),
             wPluginSpecificComp,
             PipelineRunConfiguration.GUI_PLUGIN_ELEMENT_PARENT_ID);
+        enableLocalEngineWidgets();
         updatePluginSpecificMinSize();
       }
       if (loadBalancingWidgets != null
@@ -605,6 +661,12 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     }
 
     wProfile.setText(Const.NVL(workingConfiguration.getExecutionDataProfileName(), ""));
+    try {
+      wLineageSink.fillItems();
+    } catch (Exception e) {
+      new ErrorDialog(getShell(), "Error", "Error getting the list of lineage sinks", e);
+    }
+    wLineageSink.setText(Const.NVL(workingConfiguration.getLineageSinkName(), ""));
 
     for (int i = 0; i < workingConfiguration.getConfigurationVariables().size(); i++) {
       DescribedVariable vvd = workingConfiguration.getConfigurationVariables().get(i);
@@ -641,6 +703,7 @@ public class PipelineRunConfigurationEditor extends MetadataEditor<PipelineRunCo
     }
 
     meta.setExecutionDataProfileName(wProfile.getText());
+    meta.setLineageSinkName(wLineageSink.getText());
 
     // The variables
     //

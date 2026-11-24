@@ -40,6 +40,9 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
     implements IPipelineEngineRunConfiguration,
         org.apache.hop.pipeline.engines.IMeasuringLocalPipelineRunConfiguration {
 
+  public static final String WIDGET_ID_WAIT_TIME = "waitTime";
+  public static final String WIDGET_ID_LOCK_FREE_ROWSETS = "lockFreeRowSets";
+
   @GuiWidgetElement(
       id = "rowSetSize",
       order = "010",
@@ -104,7 +107,7 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
 
   /** The feedback size. */
   @GuiWidgetElement(
-      id = "waitTime",
+      id = WIDGET_ID_WAIT_TIME,
       order = "070",
       parentId = PipelineRunConfiguration.GUI_PLUGIN_ELEMENT_PARENT_ID,
       type = GuiElementType.TEXT,
@@ -194,6 +197,22 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
   @HopMetadataProperty(key = "buffer_deadlock_spill_directory")
   protected String bufferDeadlockSpillDirectory;
 
+  /**
+   * Experimental: lock-free row sets between transforms. The wait time for buffer checks is not
+   * used then.
+   */
+  @GuiWidgetElement(
+      id = WIDGET_ID_LOCK_FREE_ROWSETS,
+      order = "140",
+      parentId = PipelineRunConfiguration.GUI_PLUGIN_ELEMENT_PARENT_ID,
+      type = GuiElementType.CHECKBOX,
+      label =
+          "i18n:org.apache.hop.ui.pipeline.config:PipelineRunConfigurationDialog.LockFreeRowSets.Label",
+      toolTip =
+          "i18n:org.apache.hop.ui.pipeline.config:PipelineRunConfigurationDialog.LockFreeRowSets.ToolTip")
+  @HopMetadataProperty(key = "lock_free_rowsets")
+  protected boolean lockFreeRowSets;
+
   @SuppressWarnings("java:S115")
   public enum SampleType {
     None,
@@ -204,6 +223,9 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
 
   public LocalPipelineRunConfiguration() {
     super();
+    // The engine it configures: needed to save it, also when it isn't created from metadata
+    setEnginePluginId("Local");
+    setEnginePluginName("Hop local pipeline engine");
     this.rowSetSize = Integer.toString(Const.ROWS_IN_ROWSET);
     this.feedbackShown = false;
     this.feedbackSize = Integer.toString(Const.ROWS_UPDATE);
@@ -214,6 +236,7 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
     this.detectBufferDeadlocks = true;
     this.mitigateBufferDeadlocks = true;
     this.bufferDeadlockSpillDirectory = "";
+    this.lockFreeRowSets = false;
   }
 
   public LocalPipelineRunConfiguration(LocalPipelineRunConfiguration config) {
@@ -231,6 +254,7 @@ public class LocalPipelineRunConfiguration extends EmptyPipelineRunConfiguration
     this.detectBufferDeadlocks = config.detectBufferDeadlocks;
     this.mitigateBufferDeadlocks = config.mitigateBufferDeadlocks;
     this.bufferDeadlockSpillDirectory = config.bufferDeadlockSpillDirectory;
+    this.lockFreeRowSets = config.lockFreeRowSets;
   }
 
   @Override

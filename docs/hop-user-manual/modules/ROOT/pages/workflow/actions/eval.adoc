@@ -124,7 +124,7 @@ When a workflow action finishes, the result of the execution will be a Result ob
 [options="header"]
 |===
 |Expression|Alternative|Data type|Meaning
-|```previous_result.getResult()```||boolean|true if the previous workflow action was executed successfully, false if there was some error.
+|```previous_result.isResult()```||boolean|true if the previous workflow action was executed successfully, false if there was some error.
 |```previous_result.getExitStatus()```|exit_status|int|exit status of previous shell script workflow action
 |```previous_result.getActionNr()```|nr|int|The action number is increased every time a workflow action is executed.
 |```previous_result.getNrErrors()```|errors|long|the number of errors, also available as variable "errors".
@@ -156,4 +156,19 @@ var firstRow = rows[0];
 firstRow.getString("name", "").equals("Foo")
 ----
 
- This script will follow the green workflow hop is the expression evaluates to true.  This happens if field "name" contains String "Foo". 
+ This script will follow the green workflow hop if the expression evaluates to true.  This happens if field "name" contains String "Foo". 
+
+== Result
+
+What this action passes on to the next action. See xref:workflow/action-results.adoc[Action results] for how results travel through a workflow.
+
+[options="header", width="90%", cols="1,3"]
+|===
+|Result|Value
+|True|The script ends with a true value, with 0 errors. A value that is not a boolean is converted the JavaScript way: `0` is false, a text that is not empty is true.
+|False|The script ends with a false value: the number of errors is 0. When the script can't be run (a syntax error, or an error while it runs), the number of errors is 1.
+|Result files|Passed on unchanged.
+|Result rows|Passed on unchanged.
+|===
+
+NOTE: The `errors` variable in the script still holds the number of errors of the previous action: this action doesn't reset it before the script runs.

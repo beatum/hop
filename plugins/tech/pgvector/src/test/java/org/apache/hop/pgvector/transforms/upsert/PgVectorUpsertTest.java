@@ -43,6 +43,7 @@ import java.util.List;
 import java.util.Map;
 import org.apache.hop.core.HopClientEnvironment;
 import org.apache.hop.core.database.Database;
+import org.apache.hop.core.database.DatabaseMeta;
 import org.apache.hop.core.database.IDatabase;
 import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.row.RowMeta;
@@ -132,7 +133,7 @@ class PgVectorUpsertTest {
 
     PgVectorUpsertData data = newData(newMeta(), statement);
     data.useSafePoints = true;
-    data.releaseSavepoint = true;
+    realSavepoints();
 
     run(
         newMeta(),
@@ -272,7 +273,7 @@ class PgVectorUpsertTest {
     PgVectorUpsertData data = newData(meta, stubStatement());
     data.deleteStatement = deleteStatement;
     data.useSafePoints = true;
-    data.releaseSavepoint = true;
+    realSavepoints();
 
     run(
         meta,
@@ -303,6 +304,48 @@ class PgVectorUpsertTest {
     inOrder.verify(database).setCommit(0);
     inOrder.verify(database, atLeastOnce()).execStatement(anyString());
     inOrder.verify(database).setCommit(500);
+  }
+
+  @Test
+  void skipsTheSchemaDdlTheEngineRanBeforeTheRun() throws Exception {
+    // On Spark every partition is copy 0: the driver ran the DDL once (prepareOnce), the
+    // partitions must not race each other creating the same table
+    PgVectorUpsertMeta meta = newMeta();
+    meta.setCreateTableIfMissing(true);
+    meta.setCreateHnswIndex(true);
+    meta.setEmbeddingDimensions("768");
+
+    PgVectorUpsertData data = newData(meta, mock(PreparedStatement.class));
+    data.commitSize = 500;
+    PgVectorUpsert transform =
+        new PgVectorUpsert(
+            helper.transformMeta, meta, data, 0, helper.pipelineMeta, helper.pipeline);
+    transform.setPreparedOnce(true);
+    transform.prepareSchemaAndCommitMode("public", "chunks");
+
+    verify(database, never()).execStatement(anyString());
+    verify(database).setCommit(500);
+  }
+
+  @Test
+  void leavesTheCommitModeOfASharedConnectionAlone() throws Exception {
+    // Switching a connection shared by a transactional pipeline to autocommit commits the rows the
+    // other transforms wrote so far.
+    PgVectorUpsertMeta meta = newMeta();
+    meta.setCreateTableIfMissing(true);
+    meta.setCreateHnswIndex(true);
+    meta.setEmbeddingDimensions("768");
+
+    PgVectorUpsertData data = newData(meta, mock(PreparedStatement.class));
+    data.commitSize = 500;
+    when(database.getConnectionGroup()).thenReturn("pipeline-transaction");
+    PgVectorUpsert transform =
+        new PgVectorUpsert(
+            helper.transformMeta, meta, data, 0, helper.pipelineMeta, helper.pipeline);
+    transform.prepareSchemaAndCommitMode("public", "chunks");
+
+    verify(database, atLeastOnce()).execStatement(anyString());
+    verify(database, never()).setCommit(anyInt());
   }
 
   @Test
@@ -396,6 +439,19 @@ class PgVectorUpsertTest {
     data.batchMode = false;
     data.commitSize = Integer.MAX_VALUE;
     return data;
+  }
+
+  /**
+   * Runs the real {@link Database#runInSavepoint} on the mocked database, so the savepoint, its
+   * rollback and its release reach the mocks as they would reach the connection.
+   */
+  private void realSavepoints() throws Exception {
+    IDatabase dialect = mock(IDatabase.class);
+    when(dialect.isReleaseSavepoint()).thenReturn(true);
+    DatabaseMeta databaseMeta = mock(DatabaseMeta.class);
+    when(databaseMeta.getIDatabase()).thenReturn(dialect);
+    when(database.getDatabaseMeta()).thenReturn(databaseMeta);
+    when(database.runInSavepoint(any())).thenCallRealMethod();
   }
 
   private void run(PgVectorUpsertMeta meta, PreparedStatement statement, List<Object[]> rows)

@@ -92,6 +92,7 @@ import org.jspecify.annotations.Nullable;
  */
 public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
   private static final Class<?> PKG = DatabaseMetaEditor.class;
+  private static final String CONST_DATABASE_DIALOG_URL_HIDDEN = "DatabaseDialog.Url.Hidden";
 
   private CTabFolder wTabFolder;
 
@@ -108,6 +109,8 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
 
   private Composite wDatabaseSpecificComp;
   private GuiCompositeWidgets guiCompositeWidgets;
+  private IDatabase pluginListenerDatabase;
+  private IGuiPluginCompositeWidgetsListener pluginListener;
 
   private Button wSupportsBoolean;
   private Button wSupportsTimestamp;
@@ -132,12 +135,12 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
   private Label wlSshTunnelPrivateKeyFile;
   private Label wlSshTunnelPassphrase;
 
-  private PropsUi props;
+  private final PropsUi props;
   private int middle;
   private int margin;
 
   private Map<Class<? extends IDatabase>, IDatabase> metaMap;
-  private List<String> excludedElementIds;
+  private final List<String> excludedElementIds;
 
   /**
    * @param hopGui The hop GUI
@@ -486,8 +489,9 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
 
   /**
    * The composite has a single listener slot, which this editor needs for its own change tracking.
-   * Database plugins that implement {@link IGuiPluginCompositeWidgetsListener} -- to enable, hide
-   * or otherwise adjust their own widgets -- are forwarded to from here; without this their
+   * Database plugins that adjust their own widgets -- to enable, hide or otherwise change them --
+   * through {@link IDatabase#getGuiWidgetsListenerClassName()}, or by implementing {@link
+   * IGuiPluginCompositeWidgetsListener} themselves, are forwarded to from here; without this their
    * callbacks would never fire.
    */
   private IGuiPluginCompositeWidgetsListener createWidgetsListener() {
@@ -524,9 +528,33 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
     if (databaseMeta == null) {
       return Optional.empty();
     }
-    return databaseMeta.getIDatabase() instanceof IGuiPluginCompositeWidgetsListener listener
-        ? Optional.of(listener)
-        : Optional.empty();
+    IDatabase iDatabase = databaseMeta.getIDatabase();
+    if (iDatabase instanceof IGuiPluginCompositeWidgetsListener listener) {
+      return Optional.of(listener);
+    }
+    // The listener belongs to one database object: make a new one when the type is changed.
+    if (iDatabase != pluginListenerDatabase) {
+      pluginListenerDatabase = iDatabase;
+      pluginListener = createPluginWidgetsListener(iDatabase);
+    }
+    return Optional.ofNullable(pluginListener);
+  }
+
+  private IGuiPluginCompositeWidgetsListener createPluginWidgetsListener(IDatabase iDatabase) {
+    String className = iDatabase == null ? null : iDatabase.getGuiWidgetsListenerClassName();
+    if (Utils.isEmpty(className)) {
+      return null;
+    }
+    try {
+      Class<?> listenerClass = iDatabase.getClass().getClassLoader().loadClass(className);
+      return (IGuiPluginCompositeWidgetsListener)
+          listenerClass.getConstructor(IDatabase.class).newInstance(iDatabase);
+    } catch (Exception e) {
+      HopGui.getInstance()
+          .getLog()
+          .logError("Error creating the widgets listener " + className + " for the database", e);
+      return null;
+    }
   }
 
   private void addDefaultPortButton() {
@@ -581,7 +609,7 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
     }
   }
 
-  private AtomicBoolean busyChangingConnectionType = new AtomicBoolean(false);
+  private final AtomicBoolean busyChangingConnectionType = new AtomicBoolean(false);
 
   private void changeConnectionType() {
 
@@ -889,17 +917,16 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
     optionsLayout.marginHeight = PropsUi.getFormMargin() * 2;
     wOptionsComp.setLayout(optionsLayout);
 
-    ColumnInfo[] optionsColumns =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "DatabaseDialog.column.Parameter"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "DatabaseDialog.column.Value"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-        };
+    ColumnInfo[] optionsColumns = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "DatabaseDialog.column.Parameter"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "DatabaseDialog.column.Value"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+    };
     optionsColumns[0].setUsingVariables(true);
     optionsColumns[1].setUsingVariables(true);
 
@@ -1563,7 +1590,7 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
       String url = databaseMeta.getURL(variables);
       if (url != null && !url.isEmpty()) {
         // Replace the full URL with a masked version
-        String maskedUrl = BaseMessages.getString(PKG, "DatabaseDialog.Url.Hidden");
+        String maskedUrl = BaseMessages.getString(PKG, CONST_DATABASE_DIALOG_URL_HIDDEN);
         message = message.replace(url, maskedUrl);
       }
 
@@ -1573,9 +1600,10 @@ public class DatabaseMetaEditor extends MetadataEditor<DatabaseMeta> {
         String resolvedManualUrl = variables.resolve(manualUrl);
         message =
             message.replace(
-                resolvedManualUrl, BaseMessages.getString(PKG, "DatabaseDialog.Url.Hidden"));
+                resolvedManualUrl, BaseMessages.getString(PKG, CONST_DATABASE_DIALOG_URL_HIDDEN));
         message =
-            message.replace(manualUrl, BaseMessages.getString(PKG, "DatabaseDialog.Url.Hidden"));
+            message.replace(
+                manualUrl, BaseMessages.getString(PKG, CONST_DATABASE_DIALOG_URL_HIDDEN));
       }
 
     } catch (Exception e) {

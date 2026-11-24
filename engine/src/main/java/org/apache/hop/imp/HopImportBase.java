@@ -46,6 +46,7 @@ import org.apache.hop.core.variables.Variables;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.metadata.serializer.json.JsonMetadataProvider;
 import org.apache.hop.metadata.serializer.multi.MultiMetadataProvider;
+import org.apache.hop.metadata.util.HopMetadataUtil;
 
 public abstract class HopImportBase implements IHopImport {
   protected ILogChannel log;
@@ -117,7 +118,7 @@ public abstract class HopImportBase implements IHopImport {
     if (metadataProvider == null) {
       this.metadataTargetFolder = metadataFolderFor(outputFolder.getName().getURI());
       metadataProvider =
-          new MultiMetadataProvider(
+          HopMetadataUtil.createMulti(
               Encr.getEncoder(),
               Arrays.asList(
                   new JsonMetadataProvider(
@@ -637,7 +638,7 @@ public abstract class HopImportBase implements IHopImport {
   public static String projectHome(
       ILogChannel log, IVariables variables, String projectName, String fallback)
       throws HopException {
-    Object[] objects = new Object[] {projectName, fallback};
+    Object[] objects = {projectName, fallback};
     ExtensionPointHandler.callExtensionPoint(
         log, variables, HopExtensionPoint.ProjectHome.id, objects);
     return (String) objects[1];

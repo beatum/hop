@@ -18,6 +18,7 @@
 package org.apache.hop.pipeline.engines.local;
 
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,7 +36,6 @@ import org.apache.hop.core.exception.HopDatabaseException;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.logging.ILoggingObject;
 import org.apache.hop.core.parameters.INamedParameters;
-import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.util.ExecutorUtil;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.execution.ExecutionBuilder;
@@ -69,6 +69,7 @@ import org.apache.hop.pipeline.transform.TransformMetaDataCombi;
     name = "Hop local pipeline engine",
     description = "Executes your pipeline locally in a multi-threaded fashion")
 public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<PipelineMeta> {
+  private static final String CONST_NON_FATAL = " (non-fatal)";
 
   private PipelineEngineCapabilities engineCapabilities = new LocalPipelineEngineCapabilities();
 
@@ -217,6 +218,7 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
     setGatheringMetrics(config.isGatheringMetrics());
     setFeedbackShown(config.isFeedbackShown());
     setFeedbackSize(Const.toInt(resolve(config.getFeedbackSize()), Const.ROWS_UPDATE));
+    setLockFreeRowSets(config.isLockFreeRowSets());
 
     // Buffer deadlock detection / optional minimal spill (classic local engine only)
     //
@@ -324,7 +326,12 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
       getExtensionDataMap().put(Const.CONNECTION_GROUP, connectionGroup);
     }
 
-    super.prepareExecution();
+    try {
+      super.prepareExecution();
+    } catch (Throwable e) {
+      recordFailedPreparation();
+      throw e;
+    }
 
     // Log buffer-deadlock analysis now that Pipeline.prepareExecution created the log channel
     if (pipelineRunConfiguration.getEngineRunConfiguration()
@@ -364,6 +371,38 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
       // Record the failure so the pipeline is reported as failed rather than as a clean finish.
       flagPreparationFailure(e);
       throw e;
+    }
+  }
+
+  /**
+   * A pipeline that fails to prepare or to initialize its transforms never gets to the point where
+   * it registers at its execution information location. Register it now, with its final state and
+   * the failure, so the failed run can be found there too. Never throws.
+   */
+  private void recordFailedPreparation() {
+    if (executionInfoLocation != null) {
+      // Already registered: the failure came later than that
+      return;
+    }
+    try {
+      lookupExecutionInformationLocation();
+      if (executionInfoLocation == null) {
+        return;
+      }
+      registerPipelineExecutionInformation();
+      if (getExecutionEndDate() == null) {
+        // It's over: without an end date the state would look like a run that went quiet
+        setExecutionEndDate(new Date());
+      }
+      synchronized (executionInfoLock) {
+        saveFinalExecutionInfoAndClose();
+      }
+    } catch (Throwable e) {
+      log.logError(
+          "Unable to register the failed pipeline at the execution information location"
+              + CONST_NON_FATAL,
+          e);
+      executionInfoLocation = null;
     }
   }
 
@@ -446,9 +485,12 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
                 lastTransform);
 
         IExecutionDataSamplerStore samplerStore = sampler.createSamplerStore(samplerMeta);
-        IRowMeta inputRowMeta = getPipelineMeta().getPrevTransformFields(this, combi.transformMeta);
-        IRowMeta outputRowMeta = getPipelineMeta().getTransformFields(this, combi.transformMeta);
-        samplerStore.init(this, inputRowMeta, outputRowMeta);
+
+        // Don't ask the transforms for their fields: the samplers take the layout from the rows
+        // they sample. Asking can run the work of a transform an extra time, for example the SQL
+        // of a Table Input on SQL Server, inserts and procedure calls included. See #9036.
+        //
+        samplerStore.init(this, null, null);
         IRowListener rowListener = samplerStore.createRowListener(sampler);
 
         // Keep the stores and samplers safe. We'll need them later on.
@@ -558,7 +600,7 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
                   log.logError(
                       "Warning: unable to register execution data at location "
                           + executionInfoLocation.getName()
-                          + " (non-fatal)",
+                          + CONST_NON_FATAL,
                       e);
                 }
               }
@@ -569,7 +611,7 @@ public class LocalPipelineEngine extends Pipeline implements IPipelineEngine<Pip
                 log.logError(
                     "Warning: unable to register execution state at location "
                         + executionInfoLocation.getName()
-                        + " (non-fatal)",
+                        + CONST_NON_FATAL,
                     e);
               }
             }

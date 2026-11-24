@@ -28,13 +28,17 @@ import java.text.MessageFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.MissingResourceException;
+import java.util.Optional;
 import java.util.PropertyResourceBundle;
 import java.util.ResourceBundle;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hop.core.Const;
 import org.apache.hop.core.exception.HopException;
+import org.apache.hop.core.plugins.HopURLClassLoader;
 
 public class GlobalMessageUtil {
 
@@ -259,13 +263,22 @@ public class GlobalMessageUtil {
       final boolean fallbackOnRoot) {
 
     final Set<Locale> activeLocales = getActiveLocales();
+    boolean foundEmpty = false;
     for (final Locale locale : activeLocales) {
       final String string =
           calculateString(
               pkgNames, locale, key, parameters, resourceClass, bundleName, fallbackOnRoot);
+      if (string != null && string.isEmpty()) {
+        // An empty value is an untranslated key (Weblate writes those): try the next locale.
+        foundEmpty = true;
+        continue;
+      }
       if (!isMissingKey(string)) {
         return string;
       }
+    }
+    if (foundEmpty) {
+      return "";
     }
     if (logNotFoundError) {
       final StringBuilder msg = new StringBuilder();
@@ -286,15 +299,22 @@ public class GlobalMessageUtil {
       final Class<?> resourceClass,
       final String bundleName,
       final boolean fallbackOnRoot) {
+    String empty = null;
     for (final String packageName : pkgNames) {
       try {
-        return calculateString(
-            packageName, locale, key, parameters, resourceClass, bundleName, fallbackOnRoot);
+        final String string =
+            calculateString(
+                packageName, locale, key, parameters, resourceClass, bundleName, fallbackOnRoot);
+        if (!string.isEmpty()) {
+          return string;
+        }
+        // Untranslated in this package: another package may still have a translation.
+        empty = string;
       } catch (final MissingResourceException e) {
         continue;
       }
     }
-    return null;
+    return empty;
   }
 
   static String calculateString(
@@ -462,7 +482,23 @@ public class GlobalMessageUtil {
    */
   static class GlobalMessageControl extends ResourceBundle.Control {
 
-    private boolean fallbackOnRoot;
+    private static final Map<String, Optional<URL>> SYSTEM_RESOURCES = new ConcurrentHashMap<>();
+
+    /** Whether a class loader class still finds resources the way HopURLClassLoader does. */
+    private static final ClassValue<Boolean> USES_HOP_RESOURCE_ORDER =
+        new ClassValue<>() {
+          @Override
+          protected Boolean computeValue(final Class<?> type) {
+            try {
+              return type.getMethod("getResource", String.class).getDeclaringClass()
+                  == HopURLClassLoader.class;
+            } catch (NoSuchMethodException e) {
+              return false;
+            }
+          }
+        };
+
+    private final boolean fallbackOnRoot;
 
     GlobalMessageControl(final boolean fallbackOnRoot) {
       this.fallbackOnRoot = fallbackOnRoot;
@@ -486,6 +522,12 @@ public class GlobalMessageUtil {
     }
 
     @Override
+    public List<String> getFormats(final String baseName) {
+      // newBundle() only reads properties files: also asking for java.class repeats every lookup
+      return FORMAT_PROPERTIES;
+    }
+
+    @Override
     public ResourceBundle newBundle(
         final String baseName,
         final Locale locale,
@@ -506,11 +548,12 @@ public class GlobalMessageUtil {
           }
         }
       } else {
-        stream = loader.getResourceAsStream(resourceName);
+        stream = openStream(findResource(loader, resourceName));
       }
-      if (stream == null) {
+      if (stream == null && !delegatesToSystemClassLoader(loader)) {
         // Retry with the system class loader, just in case we are dealing with a messy plug-in.
-        stream = ClassLoader.getSystemResourceAsStream(resourceName);
+        // A loader that delegates to the system class loader has already searched it.
+        stream = openStream(findSystemResource(resourceName));
       }
       if (stream != null) {
         try {
@@ -526,6 +569,51 @@ public class GlobalMessageUtil {
         throw new MissingResourceException(msg.toString(), loader.getClass().getName(), baseName);
       }
       return bundle;
+    }
+
+    /**
+     * Looks a bundle up the way the loader would, but answers the system class loader's part from a
+     * cache. Most candidate bundles exist nowhere, and every plugin loader would otherwise search
+     * all the jars on the class path again for each of them.
+     */
+    private static URL findResource(final ClassLoader loader, final String name) {
+      if (loader == ClassLoader.getSystemClassLoader()) {
+        return findSystemResource(name);
+      }
+      if (loader instanceof HopURLClassLoader hopLoader
+          && USES_HOP_RESOURCE_ORDER.get(loader.getClass())) {
+        // HopURLClassLoader.getResource(): this loader's own jars first, then the parent
+        final URL url = hopLoader.findResource(name);
+        if (url != null || hopLoader.getParent() == null) {
+          return url;
+        }
+        return findResource(hopLoader.getParent(), name);
+      }
+      return loader.getResource(name);
+    }
+
+    private static URL findSystemResource(final String name) {
+      if (ClassPathPropertiesIndex.isAbsent(name)) {
+        return null;
+      }
+      // The system class path does not change while Hop runs
+      return SYSTEM_RESOURCES
+          .computeIfAbsent(name, n -> Optional.ofNullable(ClassLoader.getSystemResource(n)))
+          .orElse(null);
+    }
+
+    private static InputStream openStream(final URL url) throws IOException {
+      return url == null ? null : url.openStream();
+    }
+
+    static boolean delegatesToSystemClassLoader(final ClassLoader loader) {
+      final ClassLoader system = ClassLoader.getSystemClassLoader();
+      for (ClassLoader current = loader; current != null; current = current.getParent()) {
+        if (current == system) {
+          return true;
+        }
+      }
+      return false;
     }
   }
 }

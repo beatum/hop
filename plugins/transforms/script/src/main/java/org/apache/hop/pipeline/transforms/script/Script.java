@@ -19,6 +19,7 @@
 package org.apache.hop.pipeline.transforms.script;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.Date;
 import javax.script.Bindings;
 import javax.script.Compilable;
@@ -36,6 +37,7 @@ import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.row.RowDataUtil;
 import org.apache.hop.core.row.RowMeta;
+import org.apache.hop.core.row.value.ValueMetaNumber;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.xml.XmlHandler;
 import org.apache.hop.i18n.BaseMessages;
@@ -53,6 +55,11 @@ import org.apache.hop.pipeline.transform.TransformMeta;
  */
 public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITransform {
   private static final Class<?> PKG = Script.class;
+
+  /**
+   * Converts a Double script result to a BigNumber; NORMAL storage keeps no state, so it is shared.
+   */
+  private static final IValueMeta DOUBLE_RESULT_META = new ValueMetaNumber("scriptResult");
 
   public static final int ABORT_PIPELINE = -1;
   public static final int ERROR_PIPELINE = -2;
@@ -84,6 +91,12 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
   private Bindings bindings;
 
   private Object[] previousRow = null;
+
+  /**
+   * Run a Groovy row script directly instead of through the engine's eval, see {@link
+   * GroovyRowScript}. Tests switch it off to compare both ways.
+   */
+  boolean directGroovyRowScript = true;
 
   /**
    * This is the base transform that forms that basis for all transforms. You can derive from this
@@ -180,22 +193,24 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
             if (StringUtils.isEmpty(field.getName())) {
               throw new HopTransformException(
                   BaseMessages.getString(
-                      PKG,
-                      "ScriptValuesMetaMod.Exception.FieldToReplaceNotFound",
-                      field.getName()));
+                      PKG, "ScriptMeta.Exception.FieldToReplaceNotFound", field.getName()));
             }
             data.replaceIndex[i] = rowMeta.indexOfValue(field.getRename());
             if (data.replaceIndex[i] < 0) {
               throw new HopTransformException(
                   BaseMessages.getString(
-                      PKG,
-                      "ScriptValuesMetaMod.Exception.FieldToReplaceNotFound",
-                      field.getRename()));
+                      PKG, "ScriptMeta.Exception.FieldToReplaceNotFound", field.getRename()));
             }
           }
         } else {
           data.replaceIndex[i] = -1;
         }
+      }
+
+      // The type of each output field, looked up once: the lookup searches the plugin registry.
+      data.fieldTypes = new int[meta.getFields().size()];
+      for (int i = 0; i < data.fieldTypes.length; i++) {
+        data.fieldTypes[i] = meta.getFields().get(i).getHopType();
       }
 
       data.context = data.engine.getContext();
@@ -257,6 +272,7 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
         } else {
           data.compiledScript = null;
         }
+        data.groovyRowScript = createGroovyRowScript();
       } catch (Exception e) {
         throw new HopValueException(
             BaseMessages.getString(PKG, "Script.Log.CouldNotCompileScript"), e);
@@ -417,7 +433,28 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
     }
   }
 
+  /**
+   * @return the direct runner for a Groovy row script, or null to evaluate through the engine
+   */
+  private GroovyRowScript createGroovyRowScript() {
+    if (!directGroovyRowScript || data.compiledScript == null) {
+      return null;
+    }
+    try {
+      return GroovyRowScript.create(data.engine, strTransformScript, data.context);
+    } catch (Exception | LinkageError e) {
+      // The engine compiled the script, so it can run it: fall back to that
+      if (isDetailed()) {
+        logDetailed("The Groovy script is run through the script engine: " + e);
+      }
+      return null;
+    }
+  }
+
   protected Object evalScript() throws ScriptException {
+    if (data.groovyRowScript != null) {
+      return data.groovyRowScript.run();
+    }
     if (data.compiledScript != null) {
       try {
         return data.compiledScript.eval(data.context);
@@ -446,7 +483,7 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
       try {
         if (result != null) {
           String classType = result.getClass().getName();
-          switch (field.getHopType()) {
+          switch (hopType(field, i)) {
             case IValueMeta.TYPE_NUMBER:
               if (classType.equalsIgnoreCase(CONST_ORG_MOZILLA_JAVASCRIPT_UNDEFINED)) {
                 return null;
@@ -552,8 +589,7 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
                 return null;
               } else if (classType.equalsIgnoreCase(CONST_ORG_MOZILLA_JAVASCRIPT_NATIVE_NUMBER)) {
                 Number nb = (Number) result;
-                // sure
-                return new BigDecimal(nb.longValue());
+                return floatingPointToBigNumber(field, nb.doubleValue());
               } else if (classType.equalsIgnoreCase(
                   CONST_ORG_MOZILLA_JAVASCRIPT_NATIVE_JAVA_OBJECT)) {
                 // Is it a BigDecimal class ?
@@ -563,18 +599,24 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
                   String string = (String) result;
                   return new BigDecimal(string);
                 }
-              } else if (classType.equalsIgnoreCase("java.lang.Byte")) {
-                return new BigDecimal(((java.lang.Byte) result).longValue());
-              } else if (classType.equalsIgnoreCase("java.lang.Short")) {
-                return new BigDecimal(((Short) result).longValue());
-              } else if (classType.equalsIgnoreCase("java.lang.Integer")) {
-                return new BigDecimal(((Integer) result).longValue());
-              } else if (classType.equalsIgnoreCase("java.lang.Long")) {
-                return new BigDecimal((Long) result);
-              } else if (classType.equalsIgnoreCase(CONST_JAVA_LANG_DOUBLE)) {
-                return new BigDecimal(((Double) result).longValue());
-              } else if (classType.equalsIgnoreCase("java.lang.String")) {
-                return new BigDecimal(Long.parseLong((String) result));
+              } else if (result instanceof BigDecimal bigDecimal) {
+                // Groovy decimal literals and arithmetic
+                return bigDecimal;
+              } else if (result instanceof BigInteger bigInteger) {
+                // Groovy, Jython and JavaScript BigInt
+                return new BigDecimal(bigInteger);
+              } else if (result instanceof Double || result instanceof Float) {
+                // A Float goes through its own text, so 0.1f stays 0.1 instead of 0.10000000149...
+                double value =
+                    result instanceof Float
+                        ? Double.parseDouble(result.toString())
+                        : (Double) result;
+                return floatingPointToBigNumber(field, value);
+              } else if (result instanceof Number number) {
+                // Byte, Short, Integer, Long
+                return BigDecimal.valueOf(number.longValue());
+              } else if (result instanceof String string) {
+                return new BigDecimal(string);
               } else {
                 throw new HopRuntimeException(
                     "JavaScript conversion to BigNumber not implemented for " + classType);
@@ -595,7 +637,7 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
               {
                 throw new HopRuntimeException(
                     "JavaScript conversion not implemented for type "
-                        + field.getHopType()
+                        + hopType(field, i)
                         + " ("
                         + field.getType()
                         + ")");
@@ -610,6 +652,30 @@ public class Script extends BaseTransform<ScriptMeta, ScriptData> implements ITr
     } else {
       throw new HopValueException("No name was specified for result value #" + (i + 1));
     }
+  }
+
+  /**
+   * The Hop type of output field i, as resolved on the first row. Without a first row, as when this
+   * class is called on its own, it is looked up.
+   */
+  private int hopType(ScriptMeta.SField field, int i) {
+    int[] fieldTypes = data.fieldTypes;
+    return fieldTypes != null ? fieldTypes[i] : field.getHopType();
+  }
+
+  /**
+   * A floating point script result as a BigNumber, converted the way any Number field is (no
+   * scientific notation for whole numbers from 1e7 upwards). NaN and Infinity, which no BigDecimal
+   * can hold, fail with the field name instead of a bare NumberFormatException.
+   */
+  private static BigDecimal floatingPointToBigNumber(ScriptMeta.SField field, double value)
+      throws HopValueException {
+    if (Double.isNaN(value) || Double.isInfinite(value)) {
+      throw new HopValueException(
+          BaseMessages.getString(
+              PKG, "Script.Exception.NotFiniteBigNumber", field.getName(), Double.toString(value)));
+    }
+    return DOUBLE_RESULT_META.getBigNumber(value);
   }
 
   private void processEndOfStream() {

@@ -25,10 +25,10 @@ import org.apache.hop.core.logging.ILogChannel;
 import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.util.Utils;
+import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.lineage.context.LineageContext;
 import org.apache.hop.lineage.hub.LineageHub;
 import org.apache.hop.lineage.model.FileIoContentSchema;
-import org.apache.hop.lineage.model.FileIoTabularColumn;
 import org.apache.hop.lineage.model.LineageEvent;
 import org.apache.hop.lineage.model.LineageEventKind;
 import org.apache.hop.lineage.model.RelationalIoLineagePayload;
@@ -317,21 +317,15 @@ public final class LineageRelationalIoEmitter {
         ctx.putAttribute("transformPluginId", transform.getTransformPluginId());
       }
       // The transform is an IVariables; the identity helper resolves host/port against it.
-      String namespace = LineageRelationalIdentity.namespace(databaseMeta, transform);
-      // Connection catalog + preferred schema, used by a sink to qualify tables recovered from SQL
-      // (which may name neither) so reads and writes of the same table share one identity.
-      String defaultCatalog = transform.resolve(databaseMeta.getDatabaseName());
-      String defaultSchema = transform.resolve(databaseMeta.getPreferredSchemaName());
       RelationalIoLineagePayload payload =
-          new RelationalIoLineagePayload(
+          payload(
+              databaseMeta,
+              transform,
               operation,
-              namespace,
+              sql,
               inputs,
               outputs,
-              sql,
               outputSchema,
-              defaultCatalog,
-              defaultSchema,
               writeColumns,
               lifecycle,
               success,
@@ -341,6 +335,39 @@ public final class LineageRelationalIoEmitter {
     } catch (Exception e) {
       logLineageFailure(transform, e);
     }
+  }
+
+  /** The payload of a relational event on a connection, with its identity resolved. */
+  static RelationalIoLineagePayload payload(
+      DatabaseMeta databaseMeta,
+      IVariables variables,
+      RelationalIoOperation operation,
+      String sql,
+      List<RelationalTable> inputs,
+      List<RelationalTable> outputs,
+      FileIoContentSchema outputSchema,
+      List<RelationalWriteColumn> writeColumns,
+      RelationalLifecycle lifecycle,
+      boolean success,
+      String message) {
+    String namespace = LineageRelationalIdentity.namespace(databaseMeta, variables);
+    // Connection catalog + preferred schema, used by a sink to qualify tables recovered from SQL
+    // (which may name neither) so reads and writes of the same table share one identity.
+    String defaultCatalog = variables.resolve(databaseMeta.getDatabaseName());
+    String defaultSchema = variables.resolve(databaseMeta.getPreferredSchemaName());
+    return new RelationalIoLineagePayload(
+        operation,
+        namespace,
+        inputs,
+        outputs,
+        sql,
+        outputSchema,
+        defaultCatalog,
+        defaultSchema,
+        writeColumns,
+        lifecycle,
+        success,
+        message);
   }
 
   /**
@@ -462,22 +489,7 @@ public final class LineageRelationalIoEmitter {
    * locator, so the structure-roots tree is empty.
    */
   static FileIoContentSchema toContentSchema(IRowMeta rowMeta) {
-    if (rowMeta == null || rowMeta.isEmpty()) {
-      return null;
-    }
-    List<FileIoTabularColumn> columns = new ArrayList<>(rowMeta.size());
-    for (IValueMeta valueMeta : rowMeta.getValueMetaList()) {
-      columns.add(
-          new FileIoTabularColumn(
-              valueMeta.getName(),
-              valueMeta.getTypeDesc(),
-              valueMeta.getLength(),
-              valueMeta.getPrecision(),
-              null,
-              null,
-              false));
-    }
-    return new FileIoContentSchema(JDBC_FORMAT_HINT, columns, List.of());
+    return LineageFileIoEmitter.toContentSchema(rowMeta, JDBC_FORMAT_HINT);
   }
 
   /**

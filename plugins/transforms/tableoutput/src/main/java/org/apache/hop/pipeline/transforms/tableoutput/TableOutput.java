@@ -41,7 +41,7 @@ import org.apache.hop.core.row.RowMeta;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.i18n.BaseMessages;
 import org.apache.hop.lineage.LineageRelationalIoEmitter;
-import org.apache.hop.lineage.hub.LineageHub;
+import org.apache.hop.lineage.LineageSinkRoutes;
 import org.apache.hop.pipeline.Pipeline;
 import org.apache.hop.pipeline.PipelineMeta;
 import org.apache.hop.pipeline.transform.BaseTransform;
@@ -79,20 +79,27 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
 
     Object[] r = getRow(); // this also waits for a previous transform to be finished.
     if (r == null) { // no more input to be expected...
-      if (first && meta.isTruncateTable() && !meta.isOnlyWhenHaveRows()) {
+      if (first && meta.isTruncateTable() && !meta.isOnlyWhenHaveRows() && !isPreparedOnce()) {
         truncateTable();
       }
+      // The end of the rows: write what is still buffered and say so, as processRow() must. A
+      // single-threaded run only disposes the transforms once all of them are done, so the
+      // transforms after this one would otherwise wait for more rows
+      emptyAndCommitBatchBuffers(false);
+      setOutputDone();
       return false;
     }
 
     if (first) {
       first = false;
-      if (meta.isTruncateTable()) {
+      // The engine did the truncate and table changes before the run (see prepareOnce), unless
+      // the table is only truncated once rows arrive
+      if (meta.isTruncateTable() && (!isPreparedOnce() || meta.isOnlyWhenHaveRows())) {
         truncateTable();
       }
 
       // Handle automatic table structure updates
-      if (meta.isAutoUpdateTableStructure()) {
+      if (meta.isAutoUpdateTableStructure() && !isPreparedOnce()) {
         updateTableStructure();
 
         // Clear prepared statement cache after DDL changes
@@ -178,7 +185,7 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
    */
   @VisibleForTesting
   void recordDynamicLineageTarget(String tableName) {
-    if (Utils.isEmpty(tableName) || !LineageHub.getInstance().isEnabled()) {
+    if (Utils.isEmpty(tableName) || !LineageSinkRoutes.isEnabled(this)) {
       return;
     }
     if (data.dynamicTablesWritten.size() >= MAX_DYNAMIC_LINEAGE_TABLES) {
@@ -321,17 +328,22 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
     }
 
     try {
-      // For PG & GP, we add a savepoint before the row.
-      // Then revert to the savepoint afterwards... (not a transaction, so hopefully still fast)
+      // For PG & GP, the row runs behind a savepoint, so a failed row is undone on its own and
+      // doesn't abort the transaction. Only the INSERT is inside: the commit below ends the
+      // savepoint, and on a connection shared by a transactional pipeline the other transforms
+      // wait while the section is open.
       //
+      PreparedStatement statement = insertStatement;
+      Object[] bindRow = insertRowData;
       if (data.useSafePoints) {
-        data.savepoint = data.db.setSavepoint();
+        data.db.runInSavepoint(
+            () -> {
+              insertOneRow(statement, bindRow);
+              return null;
+            });
+      } else {
+        insertOneRow(statement, insertRowData);
       }
-      data.db.setValues(data.insertRowMeta, insertRowData, insertStatement);
-      data.db.insertRow(
-          insertStatement,
-          data.batchMode,
-          false); // false: no commit, it is handled in this transform differently
       if (isRowLevel()) {
         logRowlevel("Written row: " + data.insertRowMeta.getString(insertRowData));
       }
@@ -345,12 +357,6 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
         commitCounter++;
       }
       data.commitCounterMap.put(tableName, commitCounter);
-
-      // Release the savepoint if needed
-      //
-      if (data.useSafePoints && data.releaseSavepoint) {
-        data.db.releaseSavepoint(data.savepoint);
-      }
 
       // Perform a commit if needed
       //
@@ -423,14 +429,6 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
       if (getTransformMeta().isDoingErrorHandling()) {
         if (isRowLevel()) {
           logRowlevel("Written row to error handling : " + getInputRowMeta().getString(r));
-        }
-
-        if (data.useSafePoints) {
-          data.db.rollback(data.savepoint);
-          if (data.releaseSavepoint) {
-            data.db.releaseSavepoint(data.savepoint);
-          }
-          // data.db.commit(true); // force a commit on the connection too.
         }
 
         sendToErrorRow = true;
@@ -693,6 +691,13 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
         PKG, "TableOutput.Error.RowNotAttempted", Const.NVL(errorMessage, ""));
   }
 
+  /** Binds and sends one row; the commit is handled by this transform, not by insertRow. */
+  private void insertOneRow(PreparedStatement statement, Object[] insertRowData)
+      throws HopDatabaseException {
+    data.db.setValues(data.insertRowMeta, insertRowData, statement);
+    data.db.insertRow(statement, data.batchMode, false);
+  }
+
   @Override
   public boolean init() {
 
@@ -716,11 +721,6 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
         data.useSafePoints =
             data.databaseMeta.getIDatabase().isUseSafePoints()
                 && getTransformMeta().isDoingErrorHandling();
-
-        // Get the boolean that indicates whether or not we can/should release
-        // savepoints during data load.
-        //
-        data.releaseSavepoint = dbInterface.isReleaseSavepoint();
 
         // Disable batch mode in case
         // - we use an unlimited commit size
@@ -781,6 +781,24 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
       }
     }
     return false;
+  }
+
+  /**
+   * Truncate the table and update its structure once for the whole run, before any copy, Spark
+   * partition or Beam bundle writes a row: otherwise every one of them would, and they would
+   * truncate each other's rows or change the table at the same time.
+   */
+  @Override
+  public void prepareOnce() throws HopException {
+    if (meta.isTruncateTable() && !meta.isOnlyWhenHaveRows()) {
+      truncateTable();
+    }
+    if (meta.isAutoUpdateTableStructure()) {
+      updateTableStructure();
+      if (data.preparedStatements != null) {
+        data.preparedStatements.clear();
+      }
+    }
   }
 
   void truncateTable() throws HopDatabaseException {
@@ -1457,7 +1475,11 @@ public class TableOutput extends BaseTransform<TableOutputMeta, TableOutputData>
       setErrors(1);
       stopAll();
     } finally {
-      setOutputDone();
+      // Only at the end of the run: batchComplete() flushes after every iteration of a
+      // single-threaded run, and the transforms after this one still read what follows
+      if (dispose) {
+        setOutputDone();
+      }
 
       if (getErrors() > 0) {
         try {

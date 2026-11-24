@@ -42,6 +42,11 @@ import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.i18n.BaseMessages;
+import org.apache.hop.lineage.api.IDeclaresLineage;
+import org.apache.hop.lineage.model.FileIoContentSchema;
+import org.apache.hop.lineage.model.FileIoOperation;
+import org.apache.hop.lineage.model.FileIoPathSyntax;
+import org.apache.hop.lineage.model.FileIoTabularColumn;
 import org.apache.hop.metadata.api.HopMetadataProperty;
 import org.apache.hop.metadata.api.HopMetadataPropertyType;
 import org.apache.hop.metadata.api.IHopMetadataProvider;
@@ -70,7 +75,7 @@ import org.apache.hop.staticschema.util.SchemaDefinitionUtil;
 @Getter
 @Setter
 public class CsvInputMeta extends BaseTransformMeta<CsvInput, CsvInputData>
-    implements ICsvInputAwareMeta<CsvInputField> {
+    implements ICsvInputAwareMeta<CsvInputField>, IDeclaresLineage {
 
   private static final Class<?> PKG = CsvInput.class;
 
@@ -252,11 +257,7 @@ public class CsvInputMeta extends BaseTransformMeta<CsvInput, CsvInputData>
                 // This layout is then taken further down the road by the metadata through the
                 // pipeline.
                 //
-                IValueMeta storageMetadata =
-                    ValueMetaFactory.cloneValueMeta(v, IValueMeta.TYPE_STRING);
-                storageMetadata.setStorageType(IValueMeta.STORAGE_TYPE_NORMAL);
-                storageMetadata.setLength(
-                    -1, -1); // we don't really know the lengths of the strings read in advance.
+                IValueMeta storageMetadata = ValueMetaFactory.createParseMeta(v);
                 v.setStorageMetadata(storageMetadata);
 
                 v.setOrigin(origin);
@@ -295,11 +296,7 @@ public class CsvInputMeta extends BaseTransformMeta<CsvInput, CsvInputData>
           // Preview will show the data the same way as we read it.
           // This layout is then taken further down the road by the metadata through the pipeline.
           //
-          IValueMeta storageMetadata =
-              ValueMetaFactory.cloneValueMeta(valueMeta, IValueMeta.TYPE_STRING);
-          storageMetadata.setStorageType(IValueMeta.STORAGE_TYPE_NORMAL);
-          storageMetadata.setLength(
-              -1, -1); // we don't really know the lengths of the strings read in advance.
+          IValueMeta storageMetadata = ValueMetaFactory.createParseMeta(valueMeta);
           valueMeta.setStorageMetadata(storageMetadata);
 
           valueMeta.setOrigin(origin);
@@ -619,5 +616,37 @@ public class CsvInputMeta extends BaseTransformMeta<CsvInput, CsvInputData>
     }
     String headerFileName = variables.resolve(inputFiles.getFirst().getFileName());
     return HopVfs.getFileObject(headerFileName, variables);
+  }
+
+  /** The layout of the file this transform reads, the same for a run and for a publication. */
+  public FileIoContentSchema readContentSchema() {
+    if (inputFields == null || inputFields.isEmpty()) {
+      return null;
+    }
+    List<FileIoTabularColumn> cols = new ArrayList<>();
+    for (CsvInputField f : inputFields) {
+      cols.add(
+          new FileIoTabularColumn(
+              f.getName(),
+              ValueMetaFactory.getValueMetaName(f.getType()),
+              f.getLength(),
+              f.getPrecision(),
+              null,
+              FileIoPathSyntax.DELIMITED,
+              false));
+    }
+    return new FileIoContentSchema("csv", cols, List.of());
+  }
+
+  /** The file this transform reads, with its layout; none when the name comes from a field. */
+  @Override
+  public List<IDeclaresLineage.Declaration> declaredLineage(
+      IVariables variables, IRowMeta inputRowMeta) {
+    String file = variables.resolve(filename);
+    if (Utils.isEmpty(file) || !Utils.isEmpty(filenameField)) {
+      return List.of();
+    }
+    return List.of(
+        new IDeclaresLineage.DeclaredFile(FileIoOperation.READ, file, readContentSchema()));
   }
 }

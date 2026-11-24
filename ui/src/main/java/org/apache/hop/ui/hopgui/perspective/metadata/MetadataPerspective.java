@@ -64,6 +64,8 @@ import org.apache.hop.metadata.refactor.MetadataReferenceFinder;
 import org.apache.hop.metadata.refactor.MetadataReferenceResult;
 import org.apache.hop.metadata.serializer.json.JsonMetadataProvider;
 import org.apache.hop.metadata.util.HopMetadataUtil;
+import org.apache.hop.metadata.util.MetadataPlace;
+import org.apache.hop.metadata.util.MetadataPlaces;
 import org.apache.hop.ui.core.ConstUi;
 import org.apache.hop.ui.core.FormDataBuilder;
 import org.apache.hop.ui.core.PropsUi;
@@ -81,6 +83,7 @@ import org.apache.hop.ui.core.gui.HopNamespace;
 import org.apache.hop.ui.core.gui.IToolbarContainer;
 import org.apache.hop.ui.core.metadata.MetadataEditor;
 import org.apache.hop.ui.core.metadata.MetadataFileType;
+import org.apache.hop.ui.core.metadata.MetadataLocationCombo;
 import org.apache.hop.ui.core.metadata.MetadataManager;
 import org.apache.hop.ui.core.security.HopSecurityUi;
 import org.apache.hop.ui.core.widget.FolderTreeIcons;
@@ -157,6 +160,8 @@ import org.eclipse.swt.widgets.Widget;
     name = "i18n::MetadataPerspective.Name",
     description = "i18n::MetadataPerspective.GuiPlugin.Description")
 public class MetadataPerspective implements IHopPerspective, TabClosable, IMetadataDropReceiver {
+  private static final String CONST_METADATA_PERSPECTIVE_DELETE_METADATA_TITLE =
+      "MetadataPerspective.DeleteMetadata.Title";
 
   public static final Class<?> PKG = MetadataPerspective.class; // i18n
   private static final String METADATA_PERSPECTIVE_TREE = "Metadata perspective tree";
@@ -229,8 +234,6 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
   /** Icon for the "Unknown" category and the metadata elements we can't load. */
   private static final String IMAGE_UNKNOWN = "ui/images/warning.svg";
 
-  private static final int FILTER_DEBOUNCE_MS = 250;
-
   private static MetadataPerspective instance;
 
   private HopGui hopGui;
@@ -301,6 +304,9 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     return hopGui != null;
   }
 
+  /** Whether the overview cards were not rebuilt on the last refresh, see refresh(). */
+  private boolean overviewStale;
+
   @Override
   public String getId() {
     return "metadata-perspective";
@@ -318,6 +324,9 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
 
   @Override
   public void perspectiveActivated() {
+    if (overviewStale) {
+      updateOverviewCards();
+    }
     this.updateSelection();
     this.updateGui();
   }
@@ -398,6 +407,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     //
     searchText = new Text(treeComposite, SWT.SEARCH | SWT.ICON_CANCEL | SWT.ICON_SEARCH);
     searchText.setMessage(BaseMessages.getString(PKG, "MetadataPerspective.Search.Placeholder"));
+    searchText.setToolTipText(BaseMessages.getString(PKG, "MetadataPerspective.Search.Tooltip"));
     PropsUi.setLook(searchText);
     FormData searchFormData = new FormData();
     searchFormData.left = new FormAttachment(0, 0);
@@ -888,6 +898,8 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
       BaseTransformDialog.positionBottomButtons(composite, buttons, PropsUi.getMargin(), null);
     }
 
+    Control location = MetadataLocationCombo.create(composite, editor);
+
     // Create editor content area
     //
     Composite area = new Composite(composite, SWT.NONE);
@@ -897,7 +909,11 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     area.setLayout(layoutArea);
     FormData fdArea = new FormData();
     fdArea.left = new FormAttachment(0, 0);
-    fdArea.top = new FormAttachment(0, 0);
+    if (location == null) {
+      fdArea.top = new FormAttachment(0, 0);
+    } else {
+      fdArea.top = new FormAttachment(location, PropsUi.getMargin());
+    }
     fdArea.right = new FormAttachment(100, 0);
     if (buttons != null) {
       fdArea.bottom = new FormAttachment(buttons[0], -PropsUi.getMargin());
@@ -959,6 +975,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
       return;
     }
     if (overview != null && !overview.isDisposed()) {
+      overviewStale = false;
       overview.setCards(buildOverviewCards());
     }
     if (editorStackLayout.topControl != overview) {
@@ -1645,7 +1662,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
       try {
         handler.save();
       } catch (Exception e) {
-        new ErrorDialog(getShell(), "Error", "Error saving file before refactoring", e);
+        new ErrorDialog(getShell(), ERROR, "Error saving file before refactoring", e);
         return false;
       }
     }
@@ -1696,7 +1713,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
       try {
         editor.save();
       } catch (Exception e) {
-        new ErrorDialog(getShell(), "Error", "Error saving metadata before refactoring", e);
+        new ErrorDialog(getShell(), ERROR, "Error saving metadata before refactoring", e);
         return false;
       }
     }
@@ -2006,7 +2023,8 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
                 objectName, totalRefCount, fileRefs.size(), metadataRefs.size(), detailLines);
       } else {
         MessageBox confirmBox = new MessageBox(getShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-        confirmBox.setText(BaseMessages.getString(PKG, "MetadataPerspective.DeleteMetadata.Title"));
+        confirmBox.setText(
+            BaseMessages.getString(PKG, CONST_METADATA_PERSPECTIVE_DELETE_METADATA_TITLE));
         confirmBox.setMessage(
             BaseMessages.getString(
                 PKG, "MetadataPerspective.DeleteMetadata.ConfirmNoRefs", objectName));
@@ -2048,7 +2066,8 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     }
 
     MessageBox confirmBox = new MessageBox(getShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-    confirmBox.setText(BaseMessages.getString(PKG, "MetadataPerspective.DeleteMetadata.Title"));
+    confirmBox.setText(
+        BaseMessages.getString(PKG, CONST_METADATA_PERSPECTIVE_DELETE_METADATA_TITLE));
     confirmBox.setMessage(
         BaseMessages.getString(
             PKG,
@@ -2206,7 +2225,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
       List<String> detailLines) {
     Shell shell =
         new Shell(hopGui.getShell(), SWT.DIALOG_TRIM | SWT.RESIZE | SWT.APPLICATION_MODAL);
-    shell.setText(BaseMessages.getString(PKG, "MetadataPerspective.DeleteMetadata.Title"));
+    shell.setText(BaseMessages.getString(PKG, CONST_METADATA_PERSPECTIVE_DELETE_METADATA_TITLE));
     shell.setImage(GuiResource.getInstance().getImageHop());
     PropsUi.setLook(shell);
     FormLayout layout = new FormLayout();
@@ -2312,10 +2331,15 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
             HopMetadataUtil.duplicateProviderChoices(
                 hopGui.getMetadataProvider(), targetProviderName);
         if (!providerChoices.isEmpty()) {
+          List<MetadataPlace> places = MetadataPlaces.of(hopGui.getMetadataProvider());
+          String[] labels = new String[providerChoices.size()];
+          for (int i = 0; i < providerChoices.size(); i++) {
+            labels[i] = MetadataPlaces.labelOf(places, providerChoices.get(i));
+          }
           EnterSelectionDialog dialog =
               new EnterSelectionDialog(
                   getShell(),
-                  providerChoices.toArray(new String[0]),
+                  labels,
                   BaseMessages.getString(
                       PKG, "MetadataPerspective.DuplicateMetadata.SelectProvider.Title"),
                   BaseMessages.getString(
@@ -2326,7 +2350,17 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
           if (chosen == null) {
             return;
           }
-          targetProviderName = chosen;
+          int chosenIndex = -1;
+          for (int i = 0; i < labels.length; i++) {
+            if (labels[i].equals(chosen)) {
+              chosenIndex = i;
+              break;
+            }
+          }
+          if (chosenIndex < 0) {
+            return;
+          }
+          targetProviderName = providerChoices.get(chosenIndex);
         }
 
         int copyNr = 2;
@@ -2462,7 +2496,17 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     }
     reloadModel();
     renderTree();
-    // Keep the overview catalog in sync when it is the visible panel (no editor open).
+    // Keep the overview catalog in sync when it is the visible panel (no editor open). While the
+    // perspective is hidden, as at startup, the cards are built when it is shown.
+    if (isActive()) {
+      updateOverviewCards();
+    } else {
+      overviewStale = true;
+    }
+  }
+
+  private void updateOverviewCards() {
+    overviewStale = false;
     if (overview != null
         && !overview.isDisposed()
         && editorStackLayout != null
@@ -3299,7 +3343,7 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
     }
     Display display = searchText.getDisplay();
     display.timerExec(-1, filterRunnable);
-    display.timerExec(FILTER_DEBOUNCE_MS, filterRunnable);
+    display.timerExec(ConstUi.FILTER_DEBOUNCE_MS, filterRunnable);
   }
 
   private void applyFilter() {
@@ -3425,36 +3469,51 @@ public class MetadataPerspective implements IHopPerspective, TabClosable, IMetad
 
   @Override
   public void navigateToPreviousFile() {
-    if (hasNavigationPreviousFile()) {
-      int index = tabFolder.getSelectionIndex() - 1;
-      if (index < 0) {
-        index = tabFolder.getItemCount() - 1;
-      }
-      tabFolder.setSelection(index);
-      updateGui();
+    CTabFolder folder = navigationFolder();
+    if (folder == null) {
+      return;
     }
+    int index = folder.getSelectionIndex() - 1;
+    if (index < 0) {
+      index = folder.getItemCount() - 1;
+    }
+    folder.setSelection(index);
+    updateGui();
   }
 
   @Override
   public void navigateToNextFile() {
-    if (hasNavigationNextFile()) {
-      int index = tabFolder.getSelectionIndex() + 1;
-      if (index >= tabFolder.getItemCount()) {
-        index = 0;
-      }
-      tabFolder.setSelection(index);
-      updateGui();
+    CTabFolder folder = navigationFolder();
+    if (folder == null) {
+      return;
     }
+    int index = folder.getSelectionIndex() + 1;
+    if (index >= folder.getItemCount()) {
+      index = 0;
+    }
+    folder.setSelection(index);
+    updateGui();
   }
 
   @Override
   public boolean hasNavigationPreviousFile() {
-    return tabFolder.getItemCount() > 1;
+    return navigationFolder() != null;
   }
 
   @Override
   public boolean hasNavigationNextFile() {
-    return tabFolder.getItemCount() > 1;
+    return navigationFolder() != null;
+  }
+
+  /**
+   * Live folder with another file to switch to. Null before the UI exists or after the folder is
+   * disposed on exit.
+   */
+  private CTabFolder navigationFolder() {
+    if (tabFolder == null || tabFolder.isDisposed() || tabFolder.getItemCount() <= 1) {
+      return null;
+    }
+    return tabFolder;
   }
 
   @Override

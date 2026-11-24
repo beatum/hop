@@ -138,13 +138,10 @@ public class Const {
           System.getProperty("HOP_AUDIT_FOLDER"),
           System.getProperty("user.dir") + File.separator + "audit");
 
-  /*
-   The name of the history folder in which the Hop local audit manager saves data
-  */
+  /** The folder that holds the Hop configuration file hop-config.json */
   @Variable(
       scope = VariableScope.SYSTEM,
-      description =
-          "The name of the history folder in which the Hop local audit manager saves data.")
+      description = "The folder that holds the Hop configuration file hop-config.json.")
   public static final String HOP_CONFIG_FOLDER =
       NVL(
           System.getProperty("HOP_CONFIG_FOLDER"),
@@ -300,21 +297,118 @@ public class Const {
   /** The default locale for the hop environment (system defined) */
   public static final Locale DEFAULT_LOCALE = Locale.getDefault();
 
-  /** The default decimal separator . or , */
+  /**
+   * The default decimal separator . or ,
+   *
+   * @deprecated captured at class-load time from {@link #DEFAULT_LOCALE}; use {@link
+   *     #getDefaultDecimalSeparator()} to read the active regional settings at call time.
+   */
+  @Deprecated(since = "2.20")
   public static final char DEFAULT_DECIMAL_SEPARATOR =
       (new DecimalFormatSymbols(DEFAULT_LOCALE)).getDecimalSeparator();
 
-  /** The default grouping separator , or . */
+  /**
+   * The default grouping separator , or .
+   *
+   * @deprecated captured at class-load time from {@link #DEFAULT_LOCALE}; use {@link
+   *     #getDefaultGroupingSeparator()} to read the active regional settings at call time.
+   */
+  @Deprecated(since = "2.20")
   public static final char DEFAULT_GROUPING_SEPARATOR =
       (new DecimalFormatSymbols(DEFAULT_LOCALE)).getGroupingSeparator();
 
-  /** The default currency symbol */
+  /**
+   * The default currency symbol
+   *
+   * @deprecated captured at class-load time from {@link #DEFAULT_LOCALE}; use {@link
+   *     #getDefaultCurrencySymbol()} to read the active regional settings at call time.
+   */
+  @Deprecated(since = "2.20")
   public static final String DEFAULT_CURRENCY_SYMBOL =
       (new DecimalFormatSymbols(DEFAULT_LOCALE)).getCurrencySymbol();
 
-  /** The default number format */
+  /**
+   * The default number format
+   *
+   * @deprecated captured at class-load time from {@link #DEFAULT_LOCALE}; use {@link
+   *     #getDefaultNumberFormat()} to read the active regional settings at call time.
+   */
+  @Deprecated(since = "2.20")
   public static final String DEFAULT_NUMBER_FORMAT =
       ((DecimalFormat) (NumberFormat.getInstance())).toPattern();
+
+  /** The format defaults of one FORMAT locale. Immutable, so it can be shared without locking. */
+  private record FormatDefaults(
+      Locale locale,
+      char decimalSeparator,
+      char groupingSeparator,
+      String currencySymbol,
+      String numberFormat) {
+
+    static FormatDefaults of(Locale locale) {
+      DecimalFormatSymbols symbols = new DecimalFormatSymbols(locale);
+      return new FormatDefaults(
+          locale,
+          symbols.getDecimalSeparator(),
+          symbols.getGroupingSeparator(),
+          symbols.getCurrencySymbol(),
+          ((DecimalFormat) NumberFormat.getInstance(locale)).toPattern());
+    }
+  }
+
+  /**
+   * The format defaults for the FORMAT locale they were built from.
+   *
+   * <p>These accessors are called from the {@code ValueMetaBase} constructor, so they sit on a hot
+   * path: building a {@link DecimalFormatSymbols} on every call would be a real cost — the same one
+   * {@code ValueMetaBase.getDecimalFormat()} already warns about for {@code DecimalFormat}. The
+   * defaults are therefore cached and rebuilt only when the FORMAT locale actually changes.
+   *
+   * <p>The snapshot is immutable and published through a volatile field, so readers never lock and
+   * never pair one locale's symbols with another's. Two threads that see a locale change at the
+   * same time may both build a snapshot; both are correct and the last write wins.
+   */
+  private static volatile FormatDefaults formatDefaults;
+
+  private static FormatDefaults getFormatDefaults() {
+    Locale formatLocale = Locale.getDefault(Locale.Category.FORMAT);
+    FormatDefaults defaults = formatDefaults;
+    if (defaults == null || !formatLocale.equals(defaults.locale())) {
+      defaults = FormatDefaults.of(formatLocale);
+      formatDefaults = defaults;
+    }
+    return defaults;
+  }
+
+  /**
+   * The decimal separator of the active regional settings, read at call time.
+   *
+   * <p>Prefer this over {@link #DEFAULT_DECIMAL_SEPARATOR}, which is captured when the class is
+   * loaded and therefore predates the regional settings being installed.
+   */
+  public static char getDefaultDecimalSeparator() {
+    return getFormatDefaults().decimalSeparator();
+  }
+
+  /** The grouping separator of the active regional settings, read at call time. */
+  public static char getDefaultGroupingSeparator() {
+    return getFormatDefaults().groupingSeparator();
+  }
+
+  /** The currency symbol of the active regional settings, read at call time. */
+  public static String getDefaultCurrencySymbol() {
+    return getFormatDefaults().currencySymbol();
+  }
+
+  /**
+   * The number format pattern of the active regional settings, read at call time. In practice the
+   * returned pattern is locale-invariant (locale-specific separators are applied later via
+   * DecimalFormatSymbols): on JDK 21 every available locale yields {@code #,##0.###} except
+   * en-US-POSIX, so callers do not generally need to re-read it when the locale changes.
+   */
+  public static String getDefaultNumberFormat() {
+    return getFormatDefaults().numberFormat();
+  }
 
   /** Default string representing Null String values (empty) */
   public static final String NULL_STRING = "";
@@ -465,6 +559,14 @@ public class Const {
   public static final String INTERNAL_VARIABLE_TRANSFORM_BUNDLE_NR =
       INTERNAL_VARIABLE_PREFIX + ".Transform.BundleNr";
 
+  /**
+   * The transforms whose once-per-run preparation the engine already did on its driver, one name
+   * per line. The native Spark and Beam engines set it; their per-partition (per-bundle) pipelines
+   * mark those transforms as prepared.
+   */
+  public static final String INTERNAL_VARIABLE_PIPELINE_PREPARED_ONCE_TRANSFORMS =
+      INTERNAL_VARIABLE_PREFIX + ".Pipeline.PreparedOnceTransforms";
+
   public static final String INTERNAL_VARIABLE_ACTION_ID = INTERNAL_VARIABLE_PREFIX + ".Action.ID";
 
   /** The Hop server name as configured in hop-server.xml */
@@ -544,6 +646,19 @@ public class Const {
           "NULL vs Empty String. If this setting is set to 'Y', an empty string and null are different. Otherwise they are not")
   public static final String HOP_EMPTY_STRING_DIFFERS_FROM_NULL =
       "HOP_EMPTY_STRING_DIFFERS_FROM_NULL";
+
+  /**
+   * Write an Avro record as text with its schema, so the text can be converted back to a record
+   * without one.
+   */
+  @Variable(
+      value = "N",
+      description =
+          "Set this variable to Y to write an Avro record as text with its schema and its data in"
+              + " Avro's JSON encoding, so the text converts back to the record without a schema."
+              + " With N only the data is written")
+  public static final String HOP_AVRO_RECORD_STRING_WITH_SCHEMA =
+      "HOP_AVRO_RECORD_STRING_WITH_SCHEMA";
 
   /**
    * System wide flag to allow non-strict string to number conversion for backward compatibility. If
@@ -793,13 +908,6 @@ public class Const {
           "The name of the variable that optionally contains an alternative rowset put timeout (in ms). This only makes a difference for extremely short lived pipelines.")
   public static final String HOP_ROWSET_PUT_TIMEOUT = "HOP_ROWSET_PUT_TIMEOUT";
 
-  /** Set this variable to Y if you want to test a more efficient batching row set. (default = N) */
-  @Variable(
-      value = "N",
-      description =
-          "Set this variable to 'Y' if you want to test a more efficient batching row set.")
-  public static final String HOP_BATCHING_ROWSET = "HOP_BATCHING_ROWSET";
-
   /**
    * Set this variable to limit max number of files the Text File Output transform can have open at
    * one time.
@@ -875,6 +983,25 @@ public class Const {
           "Set this variable to 'Y' to return 0 when all values within an aggregate are NULL. Otherwise by default a NULL is returned when all values are NULL.")
   public static final String HOP_AGGREGATION_ALL_NULLS_ARE_ZERO =
       "HOP_AGGREGATION_ALL_NULLS_ARE_ZERO";
+
+  /**
+   * The FORMAT locale currently in effect (language_COUNTRY, for example {@code en_US} or {@code
+   * nl_BE}). Set when a lifecycle environment is enabled so pipelines can see which regional
+   * settings they are running under.
+   */
+  @Variable(
+      description =
+          "The FORMAT locale in effect for number, currency and date conversion (for example en_US). Set automatically when a lifecycle environment with a format locale is enabled.")
+  public static final String HOP_FORMAT_LOCALE = "HOP_FORMAT_LOCALE";
+
+  /**
+   * The default timezone currently in effect (IANA id, for example {@code Europe/Brussels}). Set
+   * when a lifecycle environment is enabled.
+   */
+  @Variable(
+      description =
+          "The default timezone in effect for date and timestamp conversion (IANA id, for example Europe/Brussels). Set automatically when a lifecycle environment with a timezone is enabled.")
+  public static final String HOP_TIMEZONE = "HOP_TIMEZONE";
 
   /** The name of the variable containing an alternative default timestamp format */
   @Variable(
@@ -1636,7 +1763,12 @@ public class Const {
    * @return true if the character is a variables. false otherwise.
    */
   public static boolean isSpace(char c) {
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || Character.isWhitespace(c);
+    return c == ' '
+        || c == '\t'
+        || c == '\r'
+        || c == '\n'
+        || Character.isWhitespace(c)
+        || Character.isSpaceChar(c);
   }
 
   /**
@@ -1891,6 +2023,15 @@ public class Const {
    */
   public static String getHopPlatformRuntime() {
     return System.getProperty(HOP_PLATFORM_RUNTIME);
+  }
+
+  /**
+   * Whether this process runs Hop GUI or Hop Web, as {@link #HOP_PLATFORM_RUNTIME} tells. Code
+   * outside the GUI asks this before it touches a GUI class: without SWT, as in hop-run, hop-server
+   * or a Spark executor, merely loading one (HopGui for example) fails with a NoClassDefFoundError.
+   */
+  public static boolean isGuiRuntime() {
+    return "GUI".equalsIgnoreCase(getHopPlatformRuntime());
   }
 
   /**
@@ -3014,7 +3155,7 @@ public class Const {
     if (numberFormats == null) {
       int numberFormatsCount = toInt(BaseMessages.getString(PKG, "Const.NumberFormat.Count"), 0);
       numberFormats = new String[numberFormatsCount + 1];
-      numberFormats[0] = DEFAULT_NUMBER_FORMAT;
+      numberFormats[0] = getDefaultNumberFormat();
       for (int i = 1; i <= numberFormatsCount; i++) {
         numberFormats[i] = BaseMessages.getString(PKG, "Const.NumberFormat" + i);
       }

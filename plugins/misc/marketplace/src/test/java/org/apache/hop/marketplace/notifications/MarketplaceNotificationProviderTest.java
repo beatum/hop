@@ -17,6 +17,7 @@
 package org.apache.hop.marketplace.notifications;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -42,7 +43,7 @@ public class MarketplaceNotificationProviderTest {
   private MarketplaceConfig config;
 
   @BeforeEach
-  public void setUp() {
+  void setUp() {
     provider = new MarketplaceNotificationProvider();
     config = new MarketplaceConfig();
     MarketplaceRepository repository =
@@ -52,7 +53,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testNewerVersionIsReported() {
+  void testNewerVersionIsReported() {
     installed("2026.09");
 
     Notification notification =
@@ -63,8 +64,8 @@ public class MarketplaceNotificationProviderTest {
     assertEquals("HubSpot 2026.10 is available", notification.getTitle());
     assertTrue(notification.getMessage().contains("2026.09"));
     assertTrue(notification.getMessage().contains("Putki Marketplace"));
-    // The marketplace overlays rather than replaces, so the advice has to say uninstall first.
-    assertTrue(notification.getMessage().toLowerCase().contains("uninstall"));
+    // Installing the new version replaces the old one, so there is no need to uninstall first.
+    assertFalse(notification.getMessage().toLowerCase().contains("uninstall"));
     assertEquals(NotificationCategory.PLUGIN, notification.getCategory());
     assertEquals("2026.10", notification.getVersion());
     assertEquals("https://example.com", notification.getLink());
@@ -72,7 +73,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testSameVersionIsNotReported() {
+  void testSameVersionIsNotReported() {
     installed("2026.10");
 
     assertNull(
@@ -81,7 +82,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testOlderCatalogVersionIsNotReported() {
+  void testOlderCatalogVersionIsNotReported() {
     // A repository that has fallen behind must not offer a downgrade as an update.
     installed("2026.10");
 
@@ -91,7 +92,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testPluginThatIsNotInstalledIsNotReported() {
+  void testPluginThatIsNotInstalledIsNotReported() {
     provider.setReceiptReaderForTesting((home, artifactId) -> null);
 
     assertNull(
@@ -100,7 +101,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testUnreadableReceiptIsSkippedRatherThanFailing() {
+  void testUnreadableReceiptIsSkippedRatherThanFailing() {
     provider.setReceiptReaderForTesting(
         (home, artifactId) -> {
           throw new IllegalStateException("receipt is corrupt");
@@ -112,7 +113,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testIdIdentifiesTheUpdateAndIsStable() {
+  void testIdIdentifiesTheUpdateAndIsStable() {
     installed("2026.09");
     OptionalPluginInfo available = available("putki-hubspot", "HubSpot", "2026.10");
 
@@ -124,7 +125,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testArtifactIdIsUsedWhenTheCatalogHasNoName() {
+  void testArtifactIdIsUsedWhenTheCatalogHasNoName() {
     installed("1.0");
 
     Notification notification =
@@ -134,7 +135,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testUnknownRepositoryLeavesTheNotificationWithoutALink() {
+  void testUnknownRepositoryLeavesTheNotificationWithoutALink() {
     installed("1.0");
     OptionalPluginInfo available = available("putki-hubspot", "HubSpot", "2.0");
     available.setSource("a-repository-that-is-not-configured");
@@ -145,7 +146,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testSnapshotIsNotAdvertisedAsAvailable() {
+  void testSnapshotIsNotAdvertisedAsAvailable() {
     // The Apache catalog carries no versions, so discovery fills in the running Hop version. On a
     // development build that is a snapshot, and no release repository has it to install.
     installed("2.19.0");
@@ -158,7 +159,7 @@ public class MarketplaceNotificationProviderTest {
   }
 
   @Test
-  public void testSnapshotIsStillReportedToSomeoneAlreadyRunningOne() {
+  void testSnapshotIsStillReportedToSomeoneAlreadyRunningOne() {
     // Someone on a snapshot has a snapshot repository configured; they are the exception.
     installed("2.19.0-SNAPSHOT");
 

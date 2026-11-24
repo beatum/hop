@@ -103,12 +103,11 @@ public class ActionSNMPTrap extends ActionBase implements Cloneable, IAction {
   /** Default port */
   public static final int DEFAULT_PORT = 162;
 
-  protected static final String[] targetTypeDesc =
-      new String[] {
-        BaseMessages.getString(PKG, "ActionSNMPTrap.TargetType.Community"),
-        BaseMessages.getString(PKG, "ActionSNMPTrap.TargetType.User")
-      };
-  protected static final String[] targetTypeCode = new String[] {"community", "user"};
+  protected static final String[] targetTypeDesc = {
+    BaseMessages.getString(PKG, "ActionSNMPTrap.TargetType.Community"),
+    BaseMessages.getString(PKG, "ActionSNMPTrap.TargetType.User")
+  };
+  protected static final String[] targetTypeCode = {"community", "user"};
 
   public ActionSNMPTrap(String n) {
     super(n, "");
@@ -141,14 +140,14 @@ public class ActionSNMPTrap extends ActionBase implements Cloneable, IAction {
   }
 
   public String getTargetTypeCode(String tt) {
-    if (tt == null) {
+    if (Utils.isEmpty(tt)) {
       return targetTypeCode[0];
     }
-    if (tt.equals(targetTypeDesc[1])) {
+    // The dialog passes the localized description. Metadata load passes the stored code.
+    if (tt.equalsIgnoreCase(targetTypeCode[1]) || tt.equalsIgnoreCase(targetTypeDesc[1])) {
       return targetTypeCode[1];
-    } else {
-      return targetTypeCode[0];
     }
+    return targetTypeCode[0];
   }
 
   /**

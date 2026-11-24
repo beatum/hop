@@ -47,7 +47,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Date;
-import java.util.HashSet;
 import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -64,6 +63,7 @@ import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.i18n.BaseMessages;
 import org.apache.hop.mail.common.MailConst;
+import org.apache.hop.mail.common.MailFolderOperations;
 import org.apache.hop.metadata.api.HopMetadata;
 import org.apache.hop.metadata.api.HopMetadataBase;
 import org.apache.hop.metadata.api.HopMetadataCategory;
@@ -309,7 +309,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       throw new HopException(
           BaseMessages.getString(
               PKG,
-              "ActionGetMailsFromPOP.Error.Connecting",
+              "MailServerConnection.Error.Connecting",
               this.serverHost,
               this.username,
               Const.NVL(this.serverPort, "")),
@@ -371,7 +371,8 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
             f.create(Folder.HOLDS_MESSAGES);
           } else {
             throw new HopException(
-                BaseMessages.getString(PKG, "MailConnection.Error.FolderNotFound", folderName));
+                BaseMessages.getString(
+                    PKG, "MailServerConnection.Error.FolderNotFound", folderName));
           }
         }
       }
@@ -527,34 +528,18 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
     addSearchTerm(new FlagTerm(new Flags(Flags.Flag.DRAFT), false));
   }
 
-  private HashSet<String> returnSubfolders(Folder folder) throws HopException {
-    HashSet<String> list = new HashSet<>();
-    try {
-      if ((folder.getType() & Folder.HOLDS_FOLDERS) != 0) {
-        Folder[] f = folder.list();
-        for (Folder value : f) {
-          // Search for sub folders
-          if ((value.getType() & Folder.HOLDS_FOLDERS) != 0) {
-            list.add(value.getFullName());
-            list.addAll(returnSubfolders(value));
-          }
-        }
-      }
-    } catch (MessagingException m) {
-      throw new HopException(m);
-    }
-    return list;
-  }
-
   /**
-   * Returns all subfolders of the specified folder
+   * Returns all subfolders of the specified folder, in the same order in every run
    *
    * @param folder parent folder
    * @return sub folders
    */
   public String[] returnAllFolders(Folder folder) throws HopException {
-    HashSet<String> list = returnSubfolders(folder);
-    return list.toArray(new String[0]);
+    try {
+      return MailFolderOperations.listSubfolders(folder).toArray(new String[0]);
+    } catch (MessagingException m) {
+      throw new HopException(m);
+    }
   }
 
   /**
@@ -630,24 +615,6 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
     return this.messagenr;
   }
 
-  private void updateDeletedMessagesCounter() {
-    this.nrDeletedMessages++;
-  }
-
-  private void setDeletedMessagesCounter() {
-    this.nrDeletedMessages = getMessagesCount();
-  }
-
-  /** Update count of moved messages. */
-  private void updatedMovedMessagesCounter() {
-    this.nrMovedMessages++;
-  }
-
-  /** Set count of moved messages. */
-  private void setMovedMessagesCounter() {
-    this.nrMovedMessages = getMessagesCount();
-  }
-
   public void updateSavedMessagesCounter() {
     this.nrSavedMessages++;
   }
@@ -675,7 +642,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       }
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "ActionGetMailsFromPOP.Error.ClosingConnection"), e);
+          BaseMessages.getString(PKG, "MailServerConnection.Error.ClosingConnection"), e);
     }
   }
 
@@ -696,7 +663,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       }
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "ActionGetMailsFromPOP.Error.ClosingFolder", getFolderName()),
+          BaseMessages.getString(PKG, "MailServerConnection.Error.ClosingFolder", getFolderName()),
           e);
     }
   }
@@ -781,7 +748,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
         }
         if (this.folder == null || !this.folder.exists()) {
           throw new HopException(
-              BaseMessages.getString(PKG, "ActionGetMailsFromPOP.InvalidFolder.Label"));
+              BaseMessages.getString(PKG, "MailServerConnection.InvalidFolder.Label"));
         }
       }
       if (write) {
@@ -793,9 +760,8 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
     } catch (Exception e) {
       throw new HopException(
           defaultFolder
-              ? BaseMessages.getString(PKG, "ActionGetMailsFromPOP.Error.OpeningDefaultFolder")
-              : BaseMessages.getString(
-                  PKG, "ActionGetMailsFromPOP.Error.OpeningFolder", folderName),
+              ? BaseMessages.getString(PKG, "MailServerConnection.Error.OpeningDefaultFolder")
+              : BaseMessages.getString(PKG, "MailServerConnection.Error.OpeningFolder", folderName),
           e);
     }
   }
@@ -812,12 +778,12 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
 
     if (defaultFolder == null) {
       throw new HopException(
-          BaseMessages.getString(PKG, "ActionGetMailsFromPOP.InvalidDefaultFolder.Label"));
+          BaseMessages.getString(PKG, "MailServerConnection.InvalidDefaultFolder.Label"));
     }
 
     if ((defaultFolder.getType() & Folder.HOLDS_MESSAGES) == 0) {
       throw new HopException(
-          BaseMessages.getString(PKG, "MailConnection.DefaultFolderCanNotHoldMessage"));
+          BaseMessages.getString(PKG, "MailServerConnection.DefaultFolderCanNotHoldMessage"));
     }
     return defaultFolder;
   }
@@ -852,7 +818,9 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
     } catch (Exception e) {
       this.messages = null;
       throw new HopException(
-          BaseMessages.getString(PKG, "MailConnection.Error.RetrieveMessages", getFolderName()), e);
+          BaseMessages.getString(
+              PKG, "MailServerConnection.Error.RetrieveMessages", getFolderName()),
+          e);
     }
   }
 
@@ -876,7 +844,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       this.message = this.messages[getMessageNr()];
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "MailConnection.Error.FetchingMessages"), e);
+          BaseMessages.getString(PKG, "MailServerConnection.Error.FetchingMessages"), e);
     }
   }
 
@@ -887,12 +855,13 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
    */
   public void deleteMessage() throws HopException {
     try {
-      this.message.setFlag(Flags.Flag.DELETED, true);
-      updateDeletedMessagesCounter();
+      this.nrDeletedMessages += MailFolderOperations.deleteMessage(this.message);
     } catch (Exception e) {
       throw new HopException(
           BaseMessages.getString(
-              PKG, "MailConnection.Error.DeletingMessage", "" + getMessage().getMessageNumber()),
+              PKG,
+              "MailServerConnection.Error.DeletingMessage",
+              "" + getMessage().getMessageNumber()),
           e);
     }
   }
@@ -904,13 +873,13 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
    */
   public void deleteMessages(boolean setCounter) throws HopException {
     try {
-      this.folder.setFlags(this.messages, new Flags(Flags.Flag.DELETED), true);
+      int deleted = MailFolderOperations.deleteMessages(this.folder, this.messages);
       if (setCounter) {
-        setDeletedMessagesCounter();
+        this.nrDeletedMessages += deleted;
       }
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "MailConnection.Error.DeletingMessage"), e);
+          BaseMessages.getString(PKG, "MailServerConnection.Error.DeletingMessage"), e);
     }
   }
 
@@ -922,16 +891,13 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
    */
   public void moveMessage() throws HopException {
     try {
-      // move all messages
-      this.folder.copyMessages(new Message[] {this.message}, this.destinationIMAPFolder);
-      updatedMovedMessagesCounter();
-      // Make sure to delete messages
-      deleteMessage();
+      this.nrMovedMessages +=
+          MailFolderOperations.moveMessage(this.folder, this.message, this.destinationIMAPFolder);
     } catch (Exception e) {
       throw new HopException(
           BaseMessages.getString(
               PKG,
-              "MailConnection.Error.MovingMessage",
+              "MailServerConnection.Error.MovingMessage",
               "" + getMessage().getMessageNumber(),
               this.destinationIMAPFolder.getName()),
           e);
@@ -945,13 +911,14 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
    */
   public void moveMessages() throws HopException {
     try {
-      this.folder.copyMessages(this.messages, this.destinationIMAPFolder);
-      deleteMessages(false);
-      setMovedMessagesCounter();
+      this.nrMovedMessages +=
+          MailFolderOperations.moveMessages(this.folder, this.messages, this.destinationIMAPFolder);
     } catch (Exception e) {
       throw new HopException(
           BaseMessages.getString(
-              PKG, "MailConnection.Error.MovingMessages", this.destinationIMAPFolder.getName()),
+              PKG,
+              "MailServerConnection.Error.MovingMessages",
+              this.destinationIMAPFolder.getName()),
           e);
     }
   }
@@ -975,7 +942,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       throw new HopException(
           BaseMessages.getString(
               PKG,
-              "MailConnection.Error.SavingMessageContent",
+              "MailServerConnection.Error.SavingMessageContent",
               "" + this.message.getMessageNumber(),
               filename,
               folderName),
@@ -1005,7 +972,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       throw new HopException(
           BaseMessages.getString(
               PKG,
-              "MailConnection.Error.SavingAttachedFiles",
+              "MailServerConnection.Error.SavingAttachedFiles",
               "" + this.message.getMessageNumber(),
               folderName),
           e);
@@ -1295,7 +1262,7 @@ public class MailServerConnection extends HopMetadataBase implements IHopMetadat
       throw new HopException(
           BaseMessages.getString(
               PKG,
-              "MailConnection.Error.CountingAttachedFiles",
+              "MailServerConnection.Error.CountingAttachedFiles",
               "" + this.message.getMessageNumber()),
           e);
     } finally {

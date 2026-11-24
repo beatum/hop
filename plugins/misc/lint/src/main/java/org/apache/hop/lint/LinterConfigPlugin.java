@@ -39,7 +39,7 @@ import org.apache.hop.lint.registry.ProjectLintYamlExporter;
 import org.apache.hop.lint.registry.RuleRegistry;
 import org.apache.hop.metadata.api.IHasHopMetadataProvider;
 import org.apache.hop.ui.core.gui.GuiCompositeWidgets;
-import org.apache.hop.ui.core.gui.IGuiPluginCompositeWidgetsListener;
+import org.apache.hop.ui.core.gui.IGuiPluginModelWidgetsListener;
 import org.apache.hop.ui.core.widget.TextVar;
 import org.apache.hop.ui.hopgui.HopGui;
 import org.apache.hop.ui.hopgui.file.shared.HopGuiAbstractGraph;
@@ -57,7 +57,7 @@ import picocli.CommandLine;
  */
 @ConfigPlugin(id = "linter-config", description = "Configure linter rules and settings")
 @GuiPlugin(description = "Linter")
-public class LinterConfigPlugin implements IConfigOptions, IGuiPluginCompositeWidgetsListener {
+public class LinterConfigPlugin implements IConfigOptions, IGuiPluginModelWidgetsListener {
 
   private static final ILogChannel log = LogChannel.GENERAL;
 
@@ -120,8 +120,7 @@ public class LinterConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
   }
 
   @Override
-  public void widgetModified(
-      GuiCompositeWidgets compositeWidgets, Control changedWidget, String widgetId) {
+  public void widgetModified(GuiCompositeWidgets compositeWidgets, String widgetId) {
     enableDependentWidgets(compositeWidgets);
     persistContents(compositeWidgets);
   }
@@ -420,11 +419,8 @@ public class LinterConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
   }
 
   /**
-   * Called by the configuration perspective when the user applies changes, and by {@code hop conf}
-   * for every registered config plugin whether or not it was given any options.
-   *
-   * <p>Because {@code hop conf} calls this unconditionally, doing anything when nothing was set
-   * would rewrite the linter settings on every unrelated {@code hop conf} command.
+   * Called by {@code hop conf} when at least one of the linter options was given. The fields hold
+   * the stored settings for the options that weren't, so those are saved unchanged.
    */
   @Override
   public boolean handleOption(
@@ -551,7 +547,22 @@ public class LinterConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
     this.configFilePath = configFilePath;
   }
 
+  /** The project folder; outside Hop Gui, the working directory. */
   public String getProjectPath() {
+    return projectFolder(true);
+  }
+
+  /**
+   * The folder of the configured hop-lint.yml or of the project Hop Gui has open, or null. Unlike
+   * {@link #getProjectPath()} this never falls back to the working directory, which is no project:
+   * hop-run or a container started in a project's subfolder has that subfolder as its working
+   * directory.
+   */
+  public String getProjectHome() {
+    return projectFolder(false);
+  }
+
+  private String projectFolder(boolean workingDirectoryOutsideGui) {
     if (configFilePath != null && !configFilePath.isEmpty()) {
       return new File(configFilePath).getParent();
     }
@@ -576,7 +587,7 @@ public class LinterConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
       log.logDetailed("No Hop GUI available to resolve the project path: " + e);
     }
 
-    return System.getProperty("user.dir");
+    return workingDirectoryOutsideGui ? System.getProperty("user.dir") : null;
   }
 
   /** The effective set of lint rules for the current project (YAML packs + project overrides). */

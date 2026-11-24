@@ -18,7 +18,9 @@
 package org.apache.hop.projects.util;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.commons.vfs2.FileObject;
@@ -41,6 +43,7 @@ import org.apache.hop.metadata.util.HopMetadataInstance;
 import org.apache.hop.metadata.util.HopMetadataUtil;
 import org.apache.hop.projects.config.ProjectsConfig;
 import org.apache.hop.projects.config.ProjectsConfigSingleton;
+import org.apache.hop.projects.environment.EnvironmentRegionalSettings;
 import org.apache.hop.projects.environment.LifecycleEnvironment;
 import org.apache.hop.projects.project.ParentProjectFolderSynchronizer;
 import org.apache.hop.projects.project.Project;
@@ -107,6 +110,10 @@ public class ProjectsUtil {
     ProjectsConfigHelper.applyProjectExportFiles(
         log, projectConfig.getProjectHome(), variables, null, true, false);
 
+    LifecycleEnvironment environment =
+        StringUtils.isNotEmpty(environmentName) ? config.findEnvironment(environmentName) : null;
+    EnvironmentRegionalSettings.apply(log, environment, variables);
+
     // Re-bind the process-global two-way password encoder from project/environment variables
     // (HOP_PASSWORD_ENCODER_PLUGIN, HOP_AES_ENCODER_KEY / HOP_AES_ENCODER_KEY_FILE). This resets
     // AES keys between projects and allows falling back to Hop obfuscation when unset.
@@ -149,6 +156,10 @@ public class ProjectsUtil {
       hasHopMetadataProvider.setMetadataProvider(metadataProvider);
     }
     HopMetadataInstance.setMetadataProvider(metadataProvider);
+    ProjectMetadataPlaces.apply(
+        metadataProvider,
+        new ProjectMetadataPlaces.NamedProject(projectName, project.getMetadataBaseFolder()),
+        parentProjects(log, config, project, variables));
     project.setMetadataProvider(metadataProvider);
     if (log.isBasic()) {
       log.logBasic(
@@ -183,7 +194,7 @@ public class ProjectsUtil {
     // where this info is valuable. Audit I/O must not block enabling a project (e.g. Docker audit
     // folder permission issues).
     //
-    if (Const.getHopPlatformRuntime() != null && Const.getHopPlatformRuntime().equals("GUI")) {
+    if (Const.isGuiRuntime()) {
       try {
         AuditManager.registerEvent(
             HopGui.DEFAULT_HOP_GUI_NAMESPACE, STRING_PROJECT_AUDIT_TYPE, projectName, "open");
@@ -209,6 +220,37 @@ public class ProjectsUtil {
     ExtensionPointHandler.callExtensionPoint(
         log, variables, HopExtensionPoint.HopProjectEnvironmentAfterEnabled.id, attributesContext);
     ProjectsConfigHelper.markEnabled(projectName, environmentName);
+  }
+
+  /**
+   * Parent projects of {@code project}, root first. A parent that cannot be read stops the walk.
+   * The list matches the parent metadata providers on the stack.
+   */
+  private static List<ProjectMetadataPlaces.NamedProject> parentProjects(
+      ILogChannel log, ProjectsConfig config, Project project, IVariables variables) {
+    List<ProjectMetadataPlaces.NamedProject> parents = new ArrayList<>();
+    String parentName = project.getParentProjectName();
+    Set<String> seen = new HashSet<>();
+    while (StringUtils.isNotEmpty(parentName) && seen.add(parentName)) {
+      ProjectConfig parentConfig = config.findProjectConfig(parentName);
+      if (parentConfig == null) {
+        break;
+      }
+      try {
+        Project parent = parentConfig.loadProject(variables);
+        String folder = parent == null ? null : parent.getMetadataBaseFolder();
+        parents.add(0, new ProjectMetadataPlaces.NamedProject(parentName, folder));
+        parentName = parent == null ? null : parent.getParentProjectName();
+      } catch (Exception e) {
+        log.logError(
+            "Could not read parent project '"
+                + parentName
+                + "' while naming metadata locations. "
+                + e.getMessage());
+        break;
+      }
+    }
+    return parents;
   }
 
   /**

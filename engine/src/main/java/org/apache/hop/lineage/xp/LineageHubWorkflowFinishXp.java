@@ -22,7 +22,9 @@ import org.apache.hop.core.extension.ExtensionPoint;
 import org.apache.hop.core.extension.IExtensionPoint;
 import org.apache.hop.core.logging.ILogChannel;
 import org.apache.hop.core.variables.IVariables;
+import org.apache.hop.lineage.LineageActionStartListener;
 import org.apache.hop.lineage.LineageRunLifecycleEmitter;
+import org.apache.hop.lineage.LineageSinkRoutes;
 import org.apache.hop.lineage.hub.LineageHub;
 import org.apache.hop.lineage.model.RunLifecyclePhase;
 import org.apache.hop.workflow.WorkflowMeta;
@@ -38,11 +40,24 @@ public class LineageHubWorkflowFinishXp implements IExtensionPoint<IWorkflowEngi
   public void callExtensionPoint(
       ILogChannel log, IVariables variables, IWorkflowEngine<WorkflowMeta> workflow)
       throws HopException {
+    // An action that threw never got its FINISHED or FAILED; close it before the workflow ends.
+    LineageActionStartListener.failUnfinishedActions(workflow);
     RunLifecyclePhase phase =
         LineageRunLifecycleEmitter.workflowFailed(workflow, workflow.getResult())
             ? RunLifecyclePhase.FAILED
             : RunLifecyclePhase.FINISHED;
     LineageRunLifecycleEmitter.emitWorkflow(workflow, phase, null);
-    LineageHub.getInstance().flushQuietly();
+    // After its last event: the sinks it reported to can be let go of once that is delivered.
+    LineageSinkRoutes.release(workflow);
+    // A top-level run waits for delivery. A nested run only waits once the queue fills up: that
+    // keeps a run per row from dropping events, without a full drain after every row.
+    if (!LineageSinkRoutes.isEnabled(workflow)) {
+      return;
+    }
+    if (LineageRunLifecycleEmitter.isTopLevel(workflow)) {
+      LineageHub.getInstance().flushQuietly();
+    } else {
+      LineageHub.getInstance().flushIfBacklogged();
+    }
   }
 }

@@ -32,24 +32,24 @@ public class ParagraphChunkingStrategyTest {
   private ParagraphChunkingStrategy strategy;
 
   @BeforeEach
-  public void setUp() {
+  void setUp() {
     strategy = new ParagraphChunkingStrategy();
   }
 
   @Test
-  public void testNullText() {
+  void testNullText() {
     List<Chunk> chunks = strategy.chunk(null, 100, 20);
     assertTrue(chunks.isEmpty());
   }
 
   @Test
-  public void testEmptyText() {
+  void testEmptyText() {
     List<Chunk> chunks = strategy.chunk("", 100, 20);
     assertTrue(chunks.isEmpty());
   }
 
   @Test
-  public void testSingleParagraph() {
+  void testSingleParagraph() {
     String text = "This is a single paragraph with no breaks.";
     List<Chunk> chunks = strategy.chunk(text, 100, 20);
     assertEquals(1, chunks.size());
@@ -57,7 +57,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testMultipleParagraphs() {
+  void testMultipleParagraphs() {
     String text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
     List<Chunk> chunks = strategy.chunk(text, 20, 0);
 
@@ -69,7 +69,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testParagraphsAreKeptWholeWhenTheyFit() {
+  void testParagraphsAreKeptWholeWhenTheyFit() {
     // Within maxSize, a paragraph is never split.
     String text =
         "This is paragraph one.\n\nThis is paragraph two with more text that is quite long.";
@@ -82,7 +82,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testOversizedParagraphIsSplitOnCharacters() {
+  void testOversizedParagraphIsSplitOnCharacters() {
     // A paragraph larger than maxSize has to be split: an embedding model would reject a chunk
     // over its token limit, so emitting it whole is not an option.
     String text =
@@ -97,7 +97,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testChunkPositionsPointIntoTheOriginalText() {
+  void testChunkPositionsPointIntoTheOriginalText() {
     String text = "First paragraph.\r\n\r\nSecond paragraph.";
     List<Chunk> chunks = strategy.chunk(text, 100, 0);
 
@@ -110,7 +110,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testWindowsLineEndings() {
+  void testWindowsLineEndings() {
     String text = "First paragraph.\r\n\r\nSecond paragraph.";
     List<Chunk> chunks = strategy.chunk(text, 20, 0);
 
@@ -120,7 +120,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testMixedLineEndings() {
+  void testMixedLineEndings() {
     String text = "First paragraph.\n\r\nSecond paragraph.";
     List<Chunk> chunks = strategy.chunk(text, 20, 0);
 
@@ -128,7 +128,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testSingleNewline() {
+  void testSingleNewline() {
     // Single newline should not create a paragraph break
     String text = "Line one\nLine two";
     List<Chunk> chunks = strategy.chunk(text, 100, 20);
@@ -137,8 +137,66 @@ public class ParagraphChunkingStrategyTest {
     assertEquals(text, chunks.get(0).getContent());
   }
 
+  /** #9283: a whitespace-only paragraph between two separators came out as a chunk. */
   @Test
-  public void testEmptyParagraphs() {
+  void testWhitespaceOnlyParagraphsAreNotEmitted() {
+    strategy.setSeparator("---");
+    String text = "one--- ---two";
+
+    List<Chunk> chunks = strategy.chunk(text, 6, 0);
+
+    assertEquals(2, chunks.size());
+    assertEquals("one", chunks.get(0).getContent());
+    assertEquals(0, chunks.get(0).getIndex());
+    assertEquals("two", chunks.get(1).getContent());
+    assertEquals(1, chunks.get(1).getIndex());
+    assertEquals(text.indexOf("two"), chunks.get(1).getStartPosition());
+  }
+
+  @Test
+  void testWhitespaceOnlyParagraphIsKeptInsideAPackedChunk() {
+    strategy.setSeparator("---");
+    String text = "one--- ---two";
+
+    List<Chunk> chunks = strategy.chunk(text, 100, 0);
+
+    assertEquals(1, chunks.size());
+    assertEquals(text, chunks.get(0).getContent());
+  }
+
+  @Test
+  void testWhitespaceOnlyTextYieldsNoChunks() {
+    assertTrue(strategy.chunk(" \n\n \t ", 100, 0).isEmpty());
+    strategy.setSeparator("---");
+    assertTrue(strategy.chunk("  ", 100, 0).isEmpty());
+  }
+
+  /** The overlap inside an oversized paragraph starts at a word, the same as for Character. */
+  @Test
+  void testOverlapInsideAnOversizedParagraphStartsAtAWord() {
+    String text =
+        "Short one.\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod"
+            + " tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis"
+            + " nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.";
+
+    List<Chunk> chunks = strategy.chunk(text, 100, 20);
+
+    assertTrue(chunks.size() > 3);
+    for (int i = 2; i < chunks.size(); i++) {
+      Chunk chunk = chunks.get(i);
+      assertEquals(
+          text.substring(chunk.getStartPosition(), chunk.getEndPosition()), chunk.getContent());
+      assertTrue(
+          Character.isWhitespace(text.charAt(chunk.getStartPosition() - 1)),
+          "chunk " + i + " starts mid-word: " + chunk.getContent());
+      assertTrue(
+          chunk.getStartPosition() < chunks.get(i - 1).getEndPosition(),
+          "the overlap still applies inside an oversized paragraph");
+    }
+  }
+
+  @Test
+  void testEmptyParagraphs() {
     String text = "First\n\n\n\nSecond";
     List<Chunk> chunks = strategy.chunk(text, 100, 20);
 
@@ -148,7 +206,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testTrailingNewlines() {
+  void testTrailingNewlines() {
     String text = "First paragraph.\n\nSecond paragraph.\n\n";
     List<Chunk> chunks = strategy.chunk(text, 20, 0);
 
@@ -156,7 +214,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testLeadingNewlines() {
+  void testLeadingNewlines() {
     String text = "\n\nFirst paragraph.\n\nSecond paragraph.";
     List<Chunk> chunks = strategy.chunk(text, 20, 0);
 
@@ -164,7 +222,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testGroupingBySize() {
+  void testGroupingBySize() {
     // Test that paragraphs are grouped when they fit within maxSize
     String text = "Short.\n\nShort.\n\nVery long paragraph that exceeds the chunk size limit.";
     List<Chunk> chunks = strategy.chunk(text, 50, 10);
@@ -178,7 +236,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testAllTextPreserved() {
+  void testAllTextPreserved() {
     String text = "Paragraph one.\n\nParagraph two.\n\nParagraph three.";
     List<Chunk> chunks = strategy.chunk(text, 100, 20);
 
@@ -195,12 +253,12 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testStrategyType() {
+  void testStrategyType() {
     assertEquals(ChunkingStrategyType.PARAGRAPH, strategy.getType());
   }
 
   @Test
-  public void testCustomMultiByteSeparator() {
+  void testCustomMultiByteSeparator() {
     // Blank lines are not the only paragraph marker: some sources mark paragraphs with a
     // multi-byte token.
     strategy.setSeparator("<PARA>");
@@ -214,7 +272,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testCustomSeparatorIsMatchedLiterally() {
+  void testCustomSeparatorIsMatchedLiterally() {
     // A separator is text, not a regular expression: metacharacters must not be interpreted.
     strategy.setSeparator(".*");
     String text = "alpha.*beta";
@@ -226,7 +284,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testCustomSeparatorKeepsPositionsInTheSourceText() {
+  void testCustomSeparatorKeepsPositionsInTheSourceText() {
     strategy.setSeparator("<P>");
     String text = "First.<P>Second.<P>Third.";
     List<Chunk> chunks = strategy.chunk(text, 7, 0);
@@ -240,7 +298,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testBlankLinesDoNotSplitWithACustomSeparator() {
+  void testBlankLinesDoNotSplitWithACustomSeparator() {
     strategy.setSeparator("<P>");
     String text = "Line one\nLine two<P>Line three";
     List<Chunk> chunks = strategy.chunk(text, 18, 0);
@@ -250,7 +308,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testEmptySeparatorRestoresBlankLineSplitting() {
+  void testEmptySeparatorRestoresBlankLineSplitting() {
     strategy.setSeparator("<P>");
     strategy.setSeparator("");
     String text = "First paragraph.\n\nSecond paragraph.";
@@ -260,7 +318,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testOversizedParagraphStillSplitWithCustomSeparator() {
+  void testOversizedParagraphStillSplitWithCustomSeparator() {
     strategy.setSeparator("<P>");
     String text = "short<P>" + "a".repeat(50);
     List<Chunk> chunks = strategy.chunk(text, 10, 0);
@@ -273,7 +331,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testPackingStillAppliesWithCustomSeparator() {
+  void testPackingStillAppliesWithCustomSeparator() {
     strategy.setSeparator("<P>");
     String text = "One.<P>Two.<P>Three.";
     List<Chunk> chunks = strategy.chunk(text, 1000, 0);
@@ -283,7 +341,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testDecodeEscapes() {
+  void testDecodeEscapes() {
     assertEquals("\n\n", ParagraphChunkingStrategy.decodeEscapes("\\n\\n"));
     assertEquals("\r\n", ParagraphChunkingStrategy.decodeEscapes("\\r\\n"));
     assertEquals("\t", ParagraphChunkingStrategy.decodeEscapes("\\t"));
@@ -295,7 +353,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testTextWithTabsAndSpaces() {
+  void testTextWithTabsAndSpaces() {
     String text = "Paragraph one.\n\n\tParagraph two with tab.\n\n  Paragraph three with spaces.";
     List<Chunk> chunks = strategy.chunk(text, 35, 0);
 
@@ -303,7 +361,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testVeryLongParagraphs() {
+  void testVeryLongParagraphs() {
     StringBuilder sb = new StringBuilder();
     for (int i = 0; i < 10; i++) {
       if (i > 0) {
@@ -325,7 +383,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void testRealWorldExample() {
+  void testRealWorldExample() {
     String text =
         "Lorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n"
             + "Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n"
@@ -340,7 +398,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void packsConsecutiveParagraphsUpToMaxSize() {
+  void packsConsecutiveParagraphsUpToMaxSize() {
     // The manual promises "packing whole paragraphs up to the chunk size", so paragraphs that
     // comfortably fit together must not come back as separate chunks.
     String text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
@@ -352,7 +410,7 @@ public class ParagraphChunkingStrategyTest {
   }
 
   @Test
-  public void packedChunksStillAddressTheSourceText() {
+  void packedChunksStillAddressTheSourceText() {
     // Separators in the source are preserved, so start/end stay usable as offsets.
     String text = "One.\n   \nTwo.\n\nThree.";
     for (Chunk chunk : strategy.chunk(text, 1000, 0)) {

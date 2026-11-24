@@ -58,6 +58,7 @@ import org.apache.hop.ui.core.gui.GuiCompositeWidgets;
 import org.apache.hop.ui.core.gui.GuiCompositeWidgetsAdapter;
 import org.apache.hop.ui.core.gui.GuiResource;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.NamingSchemeTypes;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
@@ -355,59 +356,58 @@ public class JsonInputDialog extends BaseTransformDialog {
 
     final int FieldsRows = input.getInputFields().size();
 
-    ColumnInfo[] colInfos =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Name.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Path.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Type.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames(),
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Format.Column"),
-              ColumnInfo.COLUMN_TYPE_FORMAT,
-              3),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Length.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Precision.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Currency.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Decimal.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Group.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.TrimType.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaBase.trimTypeDesc,
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Repeat.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              new String[] {
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
-              },
-              true),
-        };
+    ColumnInfo[] colInfos = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Name.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Path.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Type.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames(),
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Format.Column"),
+          ColumnInfo.COLUMN_TYPE_FORMAT,
+          3),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Length.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Precision.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Currency.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Decimal.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Group.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.TrimType.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaBase.trimTypeDesc,
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "JsonInputDialog.FieldsTable.Repeat.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          new String[] {
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
+          },
+          true),
+    };
 
     colInfos[0].setNamingSchemeType(NamingSchemeTypes.HOP_FIELD);
     colInfos[0].setUsingVariables(true);
@@ -1132,28 +1132,28 @@ public class JsonInputDialog extends BaseTransformDialog {
     // ///////////////////////////////////////////////////////////
   }
 
+  /**
+   * Load previous-transform fields into the source combo. Do not call {@code removeAll()} here.
+   * {@code removeAll()} clears the text, including on this editable combo, and a failed lookup
+   * would leave the source field empty. {@code CCombo.setItems} clears the text only when the combo
+   * is not editable. The lookup runs first, and {@code ComboItems.setItemsKeepingText} writes the
+   * previous text back when it returns.
+   */
   private void setSourceStreamField(boolean isShowErrorDialog) {
     try {
-      String value = wFieldValue.getText();
-      wFieldValue.removeAll();
-
-      IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
-      if (r != null) {
-        wFieldValue.setItems(r.getFieldNames());
+      IRowMeta row = pipelineMeta.getPrevTransformFields(variables, transformName);
+      if (row != null) {
+        ComboItems.setItemsKeepingText(wFieldValue, row.getFieldNames());
       }
-      if (value != null) {
-        wFieldValue.setText(value);
-      }
-    } catch (HopException ke) {
+    } catch (HopException exception) {
       if (!isShowErrorDialog) {
         return;
       }
-
       new ErrorDialog(
           shell,
           BaseMessages.getString(PKG, "JsonInputDialog.FailedToGetFields.DialogTitle"),
           BaseMessages.getString(PKG, "JsonInputDialog.FailedToGetFields.DialogMessage"),
-          ke);
+          exception);
     }
   }
 

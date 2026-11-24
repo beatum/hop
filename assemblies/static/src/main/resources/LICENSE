@@ -595,6 +595,9 @@ This product bundles beam-sdks-java-io-kafka 2.74.0, which is available under a
 This product bundles beam-sdks-java-io-mqtt 2.74.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
+This product bundles beam-sdks-java-io-parquet 2.74.0, which is available under a
+"Apache 2.0" license. For details, see LICENSE.
+
 This product bundles beam-sdks-java-io-snowflake 2.74.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
@@ -798,6 +801,9 @@ This product bundles content-type 2.3, which is available under a
 
 This product bundles converter-jackson 2.7.2, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
+
+This product bundles copilot-sdk-java 1.0.28, which is available under a
+"The MIT" license. For details, see licenses/LICENSE-MIT.
 
 This product bundles crate-jdbc 2.7.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
@@ -1564,6 +1570,9 @@ This product bundles jackson-datatype-jsr310 2.18.3, which is available under a
 This product bundles jackson-datatype-jsr310 2.21.2, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
+This product bundles jackson-datatype-jsr310 2.21.7, which is available under a
+"Apache 2.0" license. For details, see LICENSE.
+
 This product bundles jackson-jaxrs-base 2.21.7, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
@@ -1744,10 +1753,10 @@ This product bundles jctools-core 3.1.0, which is available under a
 This product bundles jdom2 2.0.6.1, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
-This product bundles jediterm-core 3.57, which is available under a
+This product bundles jediterm-core 3.76, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
-This product bundles jediterm-ui 3.57, which is available under a
+This product bundles jediterm-ui 3.76, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
 This product bundles jempbox 1.8.17, which is available under a
@@ -1903,7 +1912,7 @@ This product bundles js-scriptengine 25.0.4, which is available under a
 This product bundles jsch 2.28.8, which is available under a
 "3-clause BSD" license. For details, see licenses/LICENSE-BSD3.
 
-This product bundles jsendnsca 2.1, which is available under a
+This product bundles jsendnsca 3.0.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
 This product bundles json 20250517, which is available under a
@@ -3116,6 +3125,12 @@ This product bundles sshd-osgi 2.19.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
 This product bundles sshd-sftp 2.19.0, which is available under a
+"Apache 2.0" license. For details, see LICENSE.
+
+This product bundles sso 2.56.0, which is available under a
+"Apache 2.0" license. For details, see LICENSE.
+
+This product bundles ssooidc 2.56.0, which is available under a
 "Apache 2.0" license. For details, see LICENSE.
 
 This product bundles ST4 4.3.4, which is available under a

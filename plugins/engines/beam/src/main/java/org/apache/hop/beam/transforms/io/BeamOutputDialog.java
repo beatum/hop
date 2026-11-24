@@ -47,7 +47,7 @@ public class BeamOutputDialog extends BaseTransformDialog {
   private static final Class<?> PKG = BeamOutput.class;
   private final BeamOutputMeta input;
 
-  private boolean getpreviousFields = false;
+  private final boolean getpreviousFields = false;
 
   private TextVar wOutputLocation;
   private MetaSelectionLine<FileDefinition> wFileDefinition;
@@ -168,7 +168,7 @@ public class BeamOutputDialog extends BaseTransformDialog {
     wCompression = new ComboVar(variables, wContent, SWT.READ_ONLY);
     PropsUi.setLook(wCompression);
     wCompression.setToolTipText(
-        BaseMessages.getString(PKG, "BeamOutputDialog.Compression.ToolTip"));
+        BaseMessages.getString(PKG, "BeamOutputDialog.Compression.Tooltip"));
     for (Compression compression : Compression.values()) {
       wCompression.add(compression.name());
     }

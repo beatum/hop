@@ -294,27 +294,16 @@ run_hop_with_watchdog() {
       echo "Sending SIGQUIT to the JVM for a thread dump, then terminating it."
       echo "${SPACER}"
 
-      # hop-run.sh does not exec java, so the JVM is a child of the shell we started.
-      local jvm_pid
-      jvm_pid=$(pgrep -P "${runner_pid}" java | head -n1)
-      if [ -z "${jvm_pid}" ]; then
-        jvm_pid=$(pgrep -f 'org.apache.hop.run.HopRun' | head -n1)
-      fi
-      if [ -n "${jvm_pid}" ]; then
-        # SIGQUIT makes the JVM print every thread's stack on its stdout, which tee captures.
-        # Twice: two dumps a few seconds apart show whether anything is moving at all.
-        kill -QUIT "${jvm_pid}" 2>/dev/null || true
-        sleep 15
-        kill -QUIT "${jvm_pid}" 2>/dev/null || true
-        sleep 10
-        kill -TERM "${jvm_pid}" 2>/dev/null || true
-        sleep 5
-        kill -KILL "${jvm_pid}" 2>/dev/null || true
-      else
-        echo "WARNING: could not find the hop-run JVM process, killing the wrapper only"
-      fi
-
+      # hop-run.sh execs java, so the process we started is the JVM.
+      # SIGQUIT makes the JVM print every thread's stack on its stdout, which tee captures.
+      # Twice: two dumps a few seconds apart show whether anything is moving at all.
+      kill -QUIT "${runner_pid}" 2>/dev/null || true
+      sleep 15
+      kill -QUIT "${runner_pid}" 2>/dev/null || true
+      sleep 10
       kill -TERM "${runner_pid}" 2>/dev/null || true
+      sleep 5
+      kill -KILL "${runner_pid}" 2>/dev/null || true
       wait "${runner_pid}" 2>/dev/null
 
       # The surefire report is built from these files, so say there why the run has no result.
@@ -332,6 +321,45 @@ run_hop_with_watchdog() {
   wait "${runner_pid}"
   return $?
 }
+
+# Copy a project for HOP_IT_ENGINE=spark-native (see the project loop) and set
+# SPARK_NATIVE_PROJECT to the copy. Projects that choose their engines themselves (Spark, Beam)
+# are skipped.
+use_spark_native_copy() {
+  local source="$1"
+  local name
+  name=$(basename "${source}")
+  case "${name}" in
+  spark* | beam*)
+    echo "Skipping ${name}: HOP_IT_ENGINE=spark-native leaves projects that pick their own engine alone"
+    return 1
+    ;;
+  esac
+  if [ -f "${source}/metadata/pipeline-run-configuration/hop-local.json" ] \
+    || [ ! -f "${source}/metadata/pipeline-run-configuration/local.json" ]; then
+    echo "Skipping ${name}: HOP_IT_ENGINE=spark-native needs a plain \"local\" run configuration"
+    return 1
+  fi
+  local root="${TMP_FOLDER}/spark-native"
+  SPARK_NATIVE_PROJECT="${root}/${name}"
+  rm -rf "${SPARK_NATIVE_PROJECT}"
+  mkdir -p "${root}"
+  cp -a "${source%/}" "${SPARK_NATIVE_PROJECT}"
+  rm -rf "${SPARK_NATIVE_PROJECT}/output"
+  # Projects point at the shared licence header one folder up
+  cp "${CURRENT_DIR}/../asf-header.txt" "${root}/" 2>/dev/null || true
+  local configs="${SPARK_NATIVE_PROJECT}/metadata/pipeline-run-configuration"
+  sed 's/"name"[[:space:]]*:[[:space:]]*"local"/"name": "hop-local"/' "${configs}/local.json" \
+    >"${configs}/hop-local.json"
+  cp "${CURRENT_DIR}/run-configurations/spark-native-local.json" "${configs}/local.json"
+  return 0
+}
+
+# The native Spark engine runs in the hop-run JVM: more heap than the default 2 GB, and no Spark
+# UI (its Jersey servlet clashes with Hop's)
+if [ "${HOP_IT_ENGINE}" = "spark-native" ]; then
+  export HOP_OPTIONS="${HOP_OPTIONS:--Xmx4g} -Dspark.ui.enabled=false"
+fi
 
 # Set up a temporary folder
 export TMP_FOLDER=/tmp/hop-it-$$
@@ -393,6 +421,19 @@ for d in "${CURRENT_DIR}"/../${PROJECT_NAME}/; do
       failures_counter=0
 
       PROJECT_NAME=$(basename "$d")
+
+      # HOP_IT_ENGINE=spark-native runs the project's tests on the native Spark engine: a copy of
+      # the project in which the "local" run configuration, which the workflows run their
+      # pipelines with, is Spark local[4] with every source spread over 4 partitions. The
+      # project's own "local" becomes "hop-local", which the suite driver keeps using. The tests
+      # and their checks are the project's own; the report is <project>-spark-native.
+      if [ "${HOP_IT_ENGINE}" = "spark-native" ]; then
+        if ! use_spark_native_copy "$d"; then
+          continue
+        fi
+        d="${SPARK_NATIVE_PROJECT}"
+        PROJECT_NAME="${PROJECT_NAME}-spark-native"
+      fi
 
       echo ${SPACER}
       echo "Starting Tests in project: ${PROJECT_NAME}"

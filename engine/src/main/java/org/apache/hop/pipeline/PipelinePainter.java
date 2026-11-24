@@ -18,6 +18,7 @@
 package org.apache.hop.pipeline;
 
 import java.text.DecimalFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -25,6 +26,7 @@ import java.util.Map;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.hop.core.Const;
+import org.apache.hop.core.CursorRowSet;
 import org.apache.hop.core.NotePadMeta;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.extension.ExtensionPointHandler;
@@ -33,6 +35,7 @@ import org.apache.hop.core.gui.AreaOwner;
 import org.apache.hop.core.gui.AreaOwner.AreaType;
 import org.apache.hop.core.gui.BasePainter;
 import org.apache.hop.core.gui.DPoint;
+import org.apache.hop.core.gui.HopPath;
 import org.apache.hop.core.gui.IGc;
 import org.apache.hop.core.gui.IGc.EColor;
 import org.apache.hop.core.gui.IGc.EFont;
@@ -47,6 +50,7 @@ import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.i18n.BaseMessages;
 import org.apache.hop.partition.PartitionSchema;
+import org.apache.hop.pipeline.debug.DebugController;
 import org.apache.hop.pipeline.engine.IEngineComponent;
 import org.apache.hop.pipeline.engine.IPipelineEngine;
 import org.apache.hop.pipeline.transform.ITransformIOMeta;
@@ -92,8 +96,9 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
   private Map<String, Object> stateMap;
   private boolean showingSelectedTransformMetrics = true;
 
-  public static final String[] magnificationDescriptions =
-      new String[] {"1000%", "800%", "600%", "400%", "200%", "150%", "100%", "75%", "50%", "25%"};
+  public static final String[] magnificationDescriptions = {
+    "1000%", "800%", "600%", "400%", "200%", "150%", "100%", "75%", "50%", "25%"
+  };
 
   public PipelinePainter(
       IGc gc,
@@ -228,8 +233,45 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
     //
     gc.setTransform(0.0f, 0.0f, 1.0f);
     drawNavigationView();
+    drawDebugModeBadge();
 
     gc.dispose();
+  }
+
+  /**
+   * Fixed label in the top-left of the canvas while a debug session is active. Drawn at the display
+   * scale, not the canvas zoom. Colors are literal RGB so dark mode does not invert them.
+   */
+  private void drawDebugModeBadge() {
+    if (!(pipeline instanceof Pipeline local) || local.getDebugController() == null) {
+      return;
+    }
+    float dpi = 1f;
+    if (screenMagnification > 0.05f) {
+      dpi = magnification / screenMagnification;
+    }
+    if (dpi < 0.5f) {
+      dpi = 1f;
+    }
+    String label = BaseMessages.getString(PKG, "PipelinePainter.DebugMode.Label");
+    gc.setTransform(0.0f, 0.0f, 1.0f);
+    gc.setAlpha(255);
+    gc.setLineWidth(1);
+    gc.setFont(EFont.GRAPH_BOLD);
+    Point extent = gc.textExtent(label);
+    gc.setTransform(0.0f, 0.0f, dpi);
+    int pad = 6;
+    int x = 8;
+    int y = 8;
+    int width = extent.x + pad * 2;
+    int height = extent.y + pad * 2;
+    gc.setBackground(255, 193, 7);
+    gc.setForeground(20, 20, 20);
+    gc.fillRoundRectangle(x, y, width, height, 8, 8);
+    gc.drawRoundRectangle(x, y, width, height, 8, 8);
+    gc.drawText(label, x + pad, y + pad, false);
+    gc.setFont(EFont.GRAPH);
+    gc.setTransform(0.0f, 0.0f, 1.0f);
   }
 
   @Override
@@ -358,7 +400,12 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
       drawTransform(transformMeta);
     }
 
-    if (slowTransformIndicatorEnabled) {
+    if (isDebugSession()) {
+      // A parked transform holds rows on its input hop. That is not a bottleneck.
+      for (TransformMeta transformMeta : pipelineMeta.getTransforms()) {
+        drawDebugRunState(transformMeta);
+      }
+    } else if (slowTransformIndicatorEnabled) {
       // Highlight possible bottlenecks
       for (TransformMeta transformMeta : pipelineMeta.getTransforms()) {
         checkDrawSlowTransformIndicator(transformMeta);
@@ -415,6 +462,45 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
     }
 
     drawRect(selectionRectangle);
+  }
+
+  /**
+   * Solid border for a debug transform. Green means at least one copy is free-running. Blue means
+   * every remaining copy is parked. Several transforms can be green at the same time.
+   */
+  private void drawDebugRunState(TransformMeta transformMeta) {
+    if (transformMeta == null || !(pipeline instanceof Pipeline localPipeline)) {
+      return;
+    }
+    DebugController debug = localPipeline.getDebugController();
+    if (debug == null) {
+      return;
+    }
+    boolean running = debug.isAnyCopyFreeRunning(transformMeta.getName());
+    boolean paused = debug.isAnyCopyPaused(transformMeta.getName());
+    if (!running && !paused) {
+      return;
+    }
+
+    Point pt = transformMeta.getLocation();
+    if (pt == null) {
+      pt = new Point(50, 50);
+    }
+    Point screen = real2screen(pt.x, pt.y);
+    gc.setLineStyle(ELineStyle.SOLID);
+    gc.setLineWidth(lineWidth + 1);
+    if (running) {
+      gc.setForeground(46, 160, 80);
+    } else {
+      gc.setForeground(55, 125, 200);
+    }
+    gc.drawRoundRectangle(screen.x - 2, screen.y - 2, iconSize + 4, iconSize + 4, 8, 8);
+    gc.setLineStyle(ELineStyle.SOLID);
+    gc.setLineWidth(lineWidth);
+  }
+
+  private boolean isDebugSession() {
+    return pipeline instanceof Pipeline localPipeline && localPipeline.getDebugController() != null;
   }
 
   private void checkDrawSlowTransformIndicator(TransformMeta transformMeta) {
@@ -791,6 +877,115 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
   }
 
   /**
+   * Cursor and stored-row count on this hop while a debug session is active. A click selects the
+   * hop in the debugger. The pill sits past the sample badge so the two do not stack.
+   */
+  private void drawDebugHopPill(
+      PipelineHopMeta pipelineHop,
+      TransformMeta fromTransform,
+      TransformMeta toTransform,
+      HopPath path) {
+    if (!(pipeline instanceof Pipeline localPipeline)
+        || localPipeline.getDebugController() == null) {
+      return;
+    }
+    List<CursorRowSet> rowSets = new ArrayList<>();
+    int unread = 0;
+    boolean rewound = false;
+    StringBuilder label = new StringBuilder();
+    for (CursorRowSet rowSet : localPipeline.getDebugController().getCursorRowSets()) {
+      if (!fromTransform.getName().equals(rowSet.getOriginTransformName())
+          || !toTransform.getName().equals(rowSet.getDestinationTransformName())) {
+        continue;
+      }
+      rowSets.add(rowSet);
+      unread += rowSet.size();
+      long stored = rowSet.storedCount();
+      int cursor = rowSet.getCursor();
+      if (cursor > 0 && cursor < stored) {
+        rewound = true;
+      }
+      if (label.length() > 0) {
+        label.append(", ");
+      }
+      label.append(
+          BaseMessages.getString(
+              PKG,
+              "PipelinePainter.DebugHop.CursorAtStored",
+              Integer.toString(cursor),
+              Long.toString(stored)));
+    }
+    if (!rowSets.isEmpty()
+        && localPipeline
+            .getDebugController()
+            .hasHopPause(fromTransform.getName(), toTransform.getName())) {
+      label.append(" · ").append(BaseMessages.getString(PKG, "PipelinePainter.DebugHop.Pause"));
+    }
+    if (rowSets.isEmpty()) {
+      return;
+    }
+
+    String text = label.toString();
+    gc.setFont(EFont.TINY);
+    Point extent = gc.textExtent(text);
+    int padX = 6;
+    int padY = 1;
+    int width = extent.x + padX * 2;
+    int height = extent.y + padY * 2;
+    // The sample-data badge uses 0.30. Keep the pill further along the hop.
+    double pillPosition = 0.62;
+    double[] pillPoint = path.pointAt(pillPosition);
+    int x = (int) pillPoint[0] - width / 2;
+    int y = (int) pillPoint[1] - height / 2;
+
+    boolean empty = unread == 0;
+    int backpressure = Math.max(1, (int) (localPipeline.getRowSetSize() * 0.99));
+    // Literal colors. Theme colors turn black text into white on the full-buffer yellow.
+    gc.setForeground(20, 20, 20);
+    if (rewound) {
+      gc.setBackground(210, 196, 240);
+    } else if (unread >= backpressure) {
+      gc.setBackground(255, 193, 7);
+    } else if (empty) {
+      gc.setBackground(210, 210, 210);
+    } else {
+      gc.setBackground(186, 214, 236);
+    }
+    gc.fillRoundRectangle(x, y, width, height, height, height);
+    gc.setForeground(20, 20, 20);
+    gc.drawText(text, x + (width - extent.x) / 2, y + (height - extent.y) / 2, true);
+    gc.setFont(EFont.GRAPH);
+
+    areaOwners.add(
+        new AreaOwner(AreaType.HOP_DEBUG_BUFFER, x, y, width, height, offset, pipelineHop, text));
+  }
+
+  /** Yellow marker beside the transform the debugger will step. */
+  private void drawDebugCurrentMarker(TransformMeta transformMeta, int x, int y) {
+    if (stateMap == null
+        || transformMeta == null
+        || !(pipeline instanceof Pipeline local)
+        || local.getDebugController() == null) {
+      return;
+    }
+    if (!transformMeta.getName().equals(stateMap.get(DebugController.STATE_CURRENT_TRANSFORM))) {
+      return;
+    }
+    gc.setFont(EFont.TINY);
+    String mark = ">";
+    Point extent = gc.textExtent(mark);
+    int height = Math.max(miniIconSize, extent.y + 2);
+    int width = Math.max(miniIconSize, extent.x + 6);
+    int badgeX = x - width - 2;
+    int badgeY = y + Math.max(0, (iconSize - height) / 2);
+    gc.setBackground(EColor.YELLOW);
+    gc.setForeground(EColor.BLACK);
+    gc.fillRoundRectangle(badgeX, badgeY, width, height, height, height);
+    gc.drawText(mark, badgeX + 3, badgeY + 1, true);
+    gc.setFont(EFont.GRAPH);
+  }
+
+  /**
    * Draw a data-preview icon on the hop near the source transform when hop-level samples exist. Key
    * format matches UI hop sampling: {@code origin + "\t" + destination}.
    */
@@ -798,10 +993,7 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
       PipelineHopMeta pipelineHop,
       TransformMeta fromTransform,
       TransformMeta toTransform,
-      int x1,
-      int y1,
-      int x2,
-      int y2)
+      HopPath path)
       throws HopException {
     if (Utils.isEmpty(outputHopRowsMap) || pipelineHop == null || fromTransform == null) {
       return;
@@ -814,8 +1006,9 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
 
     // Place at ~30% of the hop length from the source transform
     double hopDataPosition = 0.30;
-    int iconX = (int) (x1 + hopDataPosition * (x2 - x1)) - miniIconSize / 2;
-    int iconY = (int) (y1 + hopDataPosition * (y2 - y1)) - miniIconSize / 2;
+    double[] iconPoint = path.pointAt(hopDataPosition);
+    int iconX = (int) iconPoint[0] - miniIconSize / 2;
+    int iconY = (int) iconPoint[1] - miniIconSize / 2;
 
     gc.drawImage(EImage.DATA, iconX, iconY, magnification);
     areaOwners.add(
@@ -1078,6 +1271,8 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
               STRING_TRANSFORM_ERROR_LOG));
     }
 
+    drawDebugCurrentMarker(transformMeta, x, y);
+
     PipelinePainterExtension extension =
         new PipelinePainterExtension(
             gc,
@@ -1223,34 +1418,28 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
       throws HopException {
     int mx;
     int my;
-    int a;
-    int b;
-    int dist;
     double angle;
 
-    gc.drawLine(x1, y1, x2, y2);
-
-    // What's the distance between the 2 points?
-    a = Math.abs(x2 - x1);
-    b = Math.abs(y2 - y1);
-    dist = (int) Math.sqrt(a * a + b * b);
+    HopPath path = createHopPath(x1, y1, x2, y2, startObject, endObject);
+    path.draw(gc);
 
     // determine factor (position of arrow to left side or right side
     // 0-->100%)
     if (factor < 0) {
-      if (dist >= 2 * iconSize) {
+      if (path.getLength() >= 2 * iconSize) {
         factor = 1.3;
       } else {
         factor = 1.2;
       }
     }
 
-    // in between 2 points
-    mx = (int) (x1 + factor * (x2 - x1) / 2);
-    my = (int) (y1 + factor * (y2 - y1) / 2);
+    double arrowFraction = getArrowFraction(path, factor);
+    double[] arrowPoint = path.pointAt(arrowFraction);
+    mx = (int) arrowPoint[0];
+    my = (int) arrowPoint[1];
 
     // calculate points for arrowhead
-    angle = Math.atan2(y2 - y1, x2 - x1) + (Math.PI / 2);
+    angle = path.angleAt(arrowFraction) + (Math.PI / 2);
 
     boolean q1 = Math.toDegrees(angle) >= 0 && Math.toDegrees(angle) < 90;
     boolean q2 = Math.toDegrees(angle) >= 90 && Math.toDegrees(angle) < 180;
@@ -1264,11 +1453,10 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
     }
 
     if (startObject instanceof TransformMeta fs && endObject instanceof TransformMeta ts) {
-      factor = 0.8;
-
       // in between 2 points
-      mx = (int) (x1 + factor * (x2 - x1) / 2) - miniIconSize / 2;
-      my = (int) (y1 + factor * (y2 - y1) / 2) - miniIconSize / 2;
+      double[] iconPoint = path.pointAt(getHopIconFraction(path));
+      mx = (int) iconPoint[0] - miniIconSize / 2;
+      my = (int) iconPoint[1] - miniIconSize / 2;
 
       boolean errorHop =
           fs.isSendingErrorRowsToTransform(ts)
@@ -1391,7 +1579,8 @@ public class PipelinePainter extends BasePainter<PipelineHopMeta, TransformMeta>
 
       // Data preview icon near the source transform for hop-level samples (target hops, etc.)
       //
-      drawHopOutputDataIndicator(pipelineHop, fs, ts, x1, y1, x2, y2);
+      drawHopOutputDataIndicator(pipelineHop, fs, ts, path);
+      drawDebugHopPill(pipelineHop, fs, ts, path);
     }
 
     PipelinePainterExtension extension =

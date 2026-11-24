@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.apache.beam.runners.dataflow.DataflowRunner;
@@ -43,9 +44,13 @@ import org.apache.hop.beam.engines.IBeamPipelineEngineRunConfiguration;
 import org.apache.hop.beam.engines.dataflow.BeamDataFlowPipelineRunConfiguration;
 import org.apache.hop.beam.metadata.RunnerType;
 import org.apache.hop.beam.pipeline.handler.BeamAddSequenceTransformHandler;
+import org.apache.hop.beam.pipeline.handler.BeamAvroInputTransformHandler;
+import org.apache.hop.beam.pipeline.handler.BeamAvroOutputTransformHandler;
 import org.apache.hop.beam.pipeline.handler.BeamGenericTransformHandler;
 import org.apache.hop.beam.pipeline.handler.BeamMemoryGroupByTransformHandler;
 import org.apache.hop.beam.pipeline.handler.BeamMergeJoinTransformHandler;
+import org.apache.hop.beam.pipeline.handler.BeamParquetInputTransformHandler;
+import org.apache.hop.beam.pipeline.handler.BeamParquetOutputTransformHandler;
 import org.apache.hop.beam.pipeline.handler.BeamRowGeneratorTransformHandler;
 import org.apache.hop.beam.util.BeamConst;
 import org.apache.hop.core.Const;
@@ -90,7 +95,11 @@ public class HopPipelineMetaToBeamPipelineConverter {
           BeamConst.STRING_MERGE_JOIN_PLUGIN_ID,
           BeamConst.STRING_BEAM_ROW_GENERATOR_PLUGIN_ID,
           BeamConst.STRING_MEMORY_GROUP_BY_PLUGIN_ID,
-          BeamConst.STRING_ADD_SEQUENCE_PLUGIN_ID);
+          BeamConst.STRING_ADD_SEQUENCE_PLUGIN_ID,
+          BeamConst.STRING_AVRO_FILE_INPUT_PLUGIN_ID,
+          BeamConst.STRING_AVRO_OUTPUT_PLUGIN_ID,
+          BeamConst.STRING_PARQUET_FILE_INPUT_PLUGIN_ID,
+          BeamConst.STRING_PARQUET_FILE_OUTPUT_PLUGIN_ID);
 
   /**
    * Transform meta classes that Beam refuses to run at all, mapped to the user-facing reason. The
@@ -267,6 +276,14 @@ public class HopPipelineMetaToBeamPipelineConverter {
         BeamConst.STRING_MEMORY_GROUP_BY_PLUGIN_ID, new BeamMemoryGroupByTransformHandler());
     transformHandlers.put(
         BeamConst.STRING_ADD_SEQUENCE_PLUGIN_ID, new BeamAddSequenceTransformHandler());
+    transformHandlers.put(
+        BeamConst.STRING_AVRO_FILE_INPUT_PLUGIN_ID, new BeamAvroInputTransformHandler());
+    transformHandlers.put(
+        BeamConst.STRING_AVRO_OUTPUT_PLUGIN_ID, new BeamAvroOutputTransformHandler());
+    transformHandlers.put(
+        BeamConst.STRING_PARQUET_FILE_INPUT_PLUGIN_ID, new BeamParquetInputTransformHandler());
+    transformHandlers.put(
+        BeamConst.STRING_PARQUET_FILE_OUTPUT_PLUGIN_ID, new BeamParquetOutputTransformHandler());
     genericTransformHandler = new BeamGenericTransformHandler();
   }
 
@@ -381,7 +398,7 @@ public class HopPipelineMetaToBeamPipelineConverter {
    * @return The sanitezed name without spaces and other special characters
    */
   private String sanitizeJobName(String name) {
-    String newName = name.toLowerCase();
+    String newName = name.toLowerCase(Locale.ROOT);
     if (name.matches("^[0-9].*")) {
       newName = "hop-" + newName;
     }

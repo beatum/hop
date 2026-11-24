@@ -66,6 +66,7 @@ import org.apache.hop.workflow.engine.IWorkflowEngine;
 @Setter
 public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpConnection {
   private static final Class<?> PKG = ActionFtp.class;
+  private static final String CONST_ACTION_FTP_ERROR_GETTING = "ActionFTP.ErrorGetting";
   private static final String CONST_LOCAL_FILE_EXISTS = "ActionFTP.LocalFileExists";
 
   /** Default encoding when making a new ftp action instance. */
@@ -303,17 +304,20 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
         downloadFiles(ftpClient, realMoveToFolder, download, result);
       }
     } catch (Exception e) {
+      // Stopping at the error limit already logged UnexpectedError per file; do not log again as a
+      // failure when Nr errors at most can still leave the action true.
       if (!download.successConditionBroken) {
         download.updateErrors();
+        logError(BaseMessages.getString(PKG, CONST_ACTION_FTP_ERROR_GETTING, e.getMessage()), e);
       }
-      logError(BaseMessages.getString(PKG, "ActionFTP.ErrorGetting", e.getMessage()), e);
     } finally {
       FtpHelper.disconnect(getLogChannel(), ftpClient);
     }
 
     result.setNrErrors(download.nrErrors);
     result.setNrFilesRetrieved(download.nrFilesRetrieved);
-    result.setResult(!exitAction && download.isSuccess());
+    // Success conditions apply only once listing/matching is ready; setup failures stay false.
+    result.setResult(!exitAction && download.transferAttempted && download.isSuccess());
     download.log();
     return result;
   }
@@ -363,7 +367,7 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
       ftpFiles = ftpClient.listFiles();
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "ActionFTP.ErrorGetting", e.getMessage()), e);
+          BaseMessages.getString(PKG, CONST_ACTION_FTP_ERROR_GETTING, e.getMessage()), e);
     }
     if (ftpFiles == null) {
       ftpFiles = new FTPFile[0];
@@ -376,14 +380,17 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
 
     Pattern pattern = Utils.isEmpty(wildcard) ? null : Pattern.compile(resolve(wildcard));
 
+    // Connection, listing and wildcard are ready: from here on, success conditions apply.
+    download.transferAttempted = true;
+
     for (FTPFile ftpFile : ftpFiles) {
       if (parentWorkflow.isStopped()) {
         throw new HopException(BaseMessages.getString(PKG, "ActionFTP.WorkflowStopped"));
       }
       if (download.successConditionBroken) {
-        throw new HopException(
-            BaseMessages.getString(
-                PKG, "ActionFTP.SuccesConditionBroken", String.valueOf(download.nrErrors)));
+        // Limit reached: stop quietly. Per-file UnexpectedError was already logged; do not throw
+        // into the outer catch (that would log a failure on an action that can still be true).
+        return;
       }
 
       String filename = ftpFile.getName();
@@ -438,7 +445,7 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
           throw new HopException(
               BaseMessages.getString(
                   PKG,
-                  "ActionFTP.ErrorGetting",
+                  CONST_ACTION_FTP_ERROR_GETTING,
                   filename + " : " + Const.NVL(ftpclient.getReplyString(), "").trim()));
         }
       }
@@ -662,6 +669,10 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
     private long nrErrors = 0;
     private long nrFilesRetrieved = 0;
     private boolean successConditionBroken = false;
+
+    /** True once listing and wildcard matching are ready; false for setup failures. */
+    private boolean transferAttempted = false;
+
     private final int limitFiles = Const.toInt(resolve(getNrLimit()), 10);
 
     void updateErrors() {
@@ -673,6 +684,7 @@ public class ActionFtp extends ActionBase implements Cloneable, IAction, IFtpCon
     }
 
     boolean isSuccess() {
+      // SUCCESS_IF_ERRORS_LESS means "at most Limit files errors" (nrErrors <= limit).
       return (nrErrors == 0 && SUCCESS_IF_NO_ERRORS.equals(getSuccessCondition()))
           || (nrFilesRetrieved >= limitFiles
               && SUCCESS_IF_AT_LEAST_X_FILES_DOWNLOADED.equals(getSuccessCondition()))

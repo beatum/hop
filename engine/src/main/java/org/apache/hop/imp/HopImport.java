@@ -19,6 +19,7 @@ package org.apache.hop.imp;
 
 import java.io.File;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
@@ -54,12 +55,11 @@ import picocli.CommandLine.ParameterException;
 @SuppressWarnings("java:S106")
 @Getter
 @Setter
-@Command(
-    description = "Import metadata",
-    versionProvider = HopVersionProvider.class,
-    mixinStandardHelpOptions = true)
+@Command(description = "Import metadata", versionProvider = HopVersionProvider.class)
 @HopCommand(id = "import", description = "Import ")
-public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand {
+public class HopImport
+    implements Callable<Integer>, Runnable, IHasHopMetadataProvider, IHopCommand {
+  private static final String CONST_AT = "' at ";
   private static final String CONST_IMPORT = "Import is ";
 
   @Option(
@@ -122,6 +122,12 @@ public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand
   private Boolean listPluginTypes;
 
   @Option(
+      names = {"-h", "--help"},
+      usageHelp = true,
+      description = "Displays this help message and quits.")
+  private boolean helpRequested;
+
+  @Option(
       names = {"-v", "--version"},
       versionHelp = true,
       description = "Print version information and exit")
@@ -181,6 +187,14 @@ public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand
     this.metadataProvider = metadataProvider;
 
     Hop.addMixinPlugins(cmd, ConfigPlugin.CATEGORY_IMPORT);
+  }
+
+  // Callable so picocli (hop.cmd.execute) gets the exit code; a Runnable always exits 0.
+  // Same contract as main(): 0 = the import finished, 1 = it stopped or failed.
+  @Override
+  public Integer call() {
+    run();
+    return isFinishedWithoutError() ? 0 : 1;
   }
 
   @Override
@@ -280,8 +294,8 @@ public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand
       ExtensionPointHandler.callExtensionPoint(
           log, variables, HopExtensionPoint.HopImportEnd.id, this);
 
-      // main() turns this into the process exit code. Without it every import, successful or not,
-      // exited 1 and no script could tell the difference.
+      // call() and main() turn this into the process exit code. Without it every import,
+      // successful or not, exited 1 and no script could tell the difference.
       finishedWithoutError = true;
 
     } catch (Exception e) {
@@ -340,7 +354,7 @@ public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand
               + "' is imported into its own home folder");
     }
     outputFolderName = projectHome;
-    log.logBasic("Importing into project '" + projectName + "' at " + projectHome);
+    log.logBasic("Importing into project '" + projectName + CONST_AT + projectHome);
   }
 
   /**
@@ -367,12 +381,12 @@ public class HopImport implements Runnable, IHasHopMetadataProvider, IHopCommand
       log.logError(
           "Unable to register project '"
               + projectName
-              + "' at "
+              + CONST_AT
               + projectHome
               + ". Is the projects plugin available? Nothing was imported.");
       return false;
     }
-    log.logBasic("Registered project '" + projectName + "' at " + projectHome);
+    log.logBasic("Registered project '" + projectName + CONST_AT + projectHome);
     return true;
   }
 

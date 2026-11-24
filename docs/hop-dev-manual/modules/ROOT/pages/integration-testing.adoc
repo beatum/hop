@@ -102,11 +102,21 @@ cd integration-tests/scripts
 
 ./run-tests-docker.sh PROJECT_NAME=transforms TEST_FILTER=0077-merge-rows
 ./run-tests-docker.sh PROJECT_NAME=transforms TEST_FILTER='*0077*'
+
+# Run a project's tests on the native Spark engine instead of the local engine
+# (Spark local[4]: sources run as one partition, native shuffles spread the rows over 4).
+# The report is <project>-spark-native.
+
+./run-tests-docker.sh PROJECT_NAME=database HOP_IT_ENGINE=spark-native
 ----
++
+With `HOP_IT_ENGINE=spark-native`, `run-tests.sh` copies the project to a temporary folder and replaces its `local` pipeline run configuration, which the test workflows run their pipelines with, by `integration-tests/scripts/run-configurations/spark-native-local.json`. The project's own `local` becomes `hop-local`, which the suite driver keeps using. The tests and their checks stay the project's own, so a failure is a difference between the engines. Projects that choose their own engines (`spark*`, `beam*`) or have no plain `local` run configuration are skipped.
 +
 . Surefire Reports
 +
 We generate xml reports that can be used by Jenkins to generate reports. these result reports can be found in the `integration-tests/surefire-reports` folder.
+By default, `run-tests.sh` runs each project with `integration-tests/scripts/run-project-tests.hpl`, and its xref:{page-component-version}@manual::pipeline/transforms/surefirereport.adoc[Surefire report output] transform writes the report.
+The script writes the report itself when it runs each workflow in a JVM of its own (`HOP_IT_PER_TEST_JVM=true` or `TEST_FILTER`), and when the suite doesn't start or runs out of time.
 
 === Testing script
 

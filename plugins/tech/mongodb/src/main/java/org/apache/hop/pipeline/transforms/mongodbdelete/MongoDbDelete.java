@@ -42,6 +42,7 @@ import org.bson.Document;
  * incoming fields.
  */
 public class MongoDbDelete extends BaseTransform<MongoDbDeleteMeta, MongoDbDeleteData> {
+  private static final String CONST_UNKNOWN = "unknown";
 
   private static final Class<?> PKG = MongoDbDelete.class;
 
@@ -156,30 +157,31 @@ public class MongoDbDelete extends BaseTransform<MongoDbDeleteMeta, MongoDbDelet
         } catch (Exception e) {
           throw new Exception(
               BaseMessages.getString(
-                  PKG, "MongoInput.ErrorMessage.ErrorLoadingMongoDbConnection", connectionName));
+                  PKG, "MongoDbDelete.ErrorMessage.ErrorLoadingMongoDbConnection", connectionName));
         }
         if (data.connection == null) {
           throw new Exception(
               BaseMessages.getString(
-                  PKG, "MongoInput.ErrorMessage.MongoDbConnection.NotFound", connectionName));
+                  PKG, "MongoDbDelete.ErrorMessage.MongoDbConnection.NotFound", connectionName));
         }
 
         String databaseName = resolve(data.connection.getDbName());
         if (StringUtils.isEmpty(databaseName)) {
-          throw new Exception(BaseMessages.getString(PKG, "MongoInput.ErrorMessage.NoDBSpecified"));
+          throw new Exception(
+              BaseMessages.getString(PKG, "MongoDbDelete.ErrorMessage.NoDBSpecified"));
         }
 
         String collection = resolve(meta.getCollection());
         if (StringUtils.isEmpty(collection)) {
           throw new Exception(
-              BaseMessages.getString(PKG, "MongoInput.ErrorMessage.NoCollectionSpecified"));
+              BaseMessages.getString(PKG, "MongoDbDelete.ErrorMessage.NoCollectionSpecified"));
         }
 
         if (!StringUtils.isEmpty(data.connection.getAuthenticationUser()) && isBasic()) {
           String authInfo =
               BaseMessages.getString(
                   PKG,
-                  "MongoDbInput.Message.NormalAuthentication",
+                  "MongoDbDelete.Message.NormalAuthentication",
                   resolve(data.connection.getAuthenticationUser()));
           logBasic(authInfo);
         }
@@ -206,13 +208,13 @@ public class MongoDbDelete extends BaseTransform<MongoDbDeleteMeta, MongoDbDelet
 
         return true;
       } catch (Exception e) {
-        String hostname = data.connection != null ? data.connection.getHostname() : "unknown";
-        String port = data.connection != null ? data.connection.getPort() : "unknown";
-        String dbName = data.connection != null ? data.connection.getDbName() : "unknown";
+        String hostname = data.connection != null ? data.connection.getHostname() : CONST_UNKNOWN;
+        String port = data.connection != null ? data.connection.getPort() : CONST_UNKNOWN;
+        String dbName = data.connection != null ? data.connection.getDbName() : CONST_UNKNOWN;
         logError(
             BaseMessages.getString(
                 PKG,
-                "MongoDbInput.ErrorConnectingToMongoDb.Exception",
+                "MongoDbDelete.ErrorConnectingToMongoDb.Exception",
                 hostname,
                 port,
                 dbName,

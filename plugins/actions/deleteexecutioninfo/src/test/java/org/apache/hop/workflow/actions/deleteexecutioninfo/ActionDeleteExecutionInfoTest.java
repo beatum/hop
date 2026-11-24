@@ -39,6 +39,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+/** Unit test for {@link ActionDeleteExecutionInfo} */
 class ActionDeleteExecutionInfoTest {
 
   private Path tempDir;
@@ -71,7 +72,7 @@ class ActionDeleteExecutionInfoTest {
 
     Result result = action.execute(new Result(), 0);
 
-    assertTrue(result.getResult());
+    assertTrue(result.isResult());
     assertEquals(0, result.getNrErrors());
     assertEquals(1, result.getNrLinesDeleted());
     assertNull(stored.getExecution("old"));
@@ -91,10 +92,15 @@ class ActionDeleteExecutionInfoTest {
 
     Result result = action.execute(new Result(), 0);
 
-    assertTrue(result.getResult());
+    assertTrue(result.isResult());
     assertEquals(2, result.getNrLinesDeleted());
     assertTrue(stored.getExecutionIds(false, 0).isEmpty());
     assertNotNull(provider.getSerializer(ExecutionInfoLocation.class).load("exec-loc"));
+  }
+
+  @Test
+  void evaluatesSuccessAndFailureHops() {
+    assertTrue(new ActionDeleteExecutionInfo().isEvaluation());
   }
 
   private MemoryMetadataProvider provider() {

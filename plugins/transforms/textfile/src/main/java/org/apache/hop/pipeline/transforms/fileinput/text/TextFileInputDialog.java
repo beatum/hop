@@ -20,7 +20,6 @@ package org.apache.hop.pipeline.transforms.fileinput.text;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -30,6 +29,7 @@ import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.vfs2.FileObject;
 import org.apache.hop.core.Const;
 import org.apache.hop.core.Props;
+import org.apache.hop.core.compress.CompressionFormat;
 import org.apache.hop.core.compress.CompressionInputStream;
 import org.apache.hop.core.compress.CompressionProviderFactory;
 import org.apache.hop.core.compress.ICompressionProvider;
@@ -50,6 +50,8 @@ import org.apache.hop.core.util.EnvUtil;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.core.vfs.HopVfs;
+import org.apache.hop.datacatalog.CatalogDataset;
+import org.apache.hop.datacatalog.CatalogDatasetType;
 import org.apache.hop.i18n.BaseMessages;
 import org.apache.hop.pipeline.Pipeline;
 import org.apache.hop.pipeline.PipelineMeta;
@@ -77,6 +79,7 @@ import org.apache.hop.ui.core.widget.MetaSelectionLine;
 import org.apache.hop.ui.core.widget.NamingSchemeTypes;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
+import org.apache.hop.ui.datacatalog.CatalogFieldsDialog;
 import org.apache.hop.ui.pipeline.dialog.PipelinePreviewProgressDialog;
 import org.apache.hop.ui.pipeline.transform.BaseTransformDialog;
 import org.apache.hop.ui.pipeline.transform.common.ICsvInputAwareImportProgressDialog;
@@ -115,11 +118,10 @@ public class TextFileInputDialog extends BaseTransformDialog
 
   public static final String CONST_SYSTEM_COMBO_NO = "System.Combo.No";
   public static final String CONST_SYSTEM_COMBO_YES = "System.Combo.Yes";
-  private static final String[] YES_NO_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO),
-        BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES)
-      };
+  private static final String[] YES_NO_COMBO = {
+    BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO),
+    BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES)
+  };
   public static final String CONST_SYSTEM_DIALOG_ERROR_TITLE = "System.Dialog.Error.Title";
   public static final String CONST_SYSTEM_BUTTON_BROWSE = "System.Button.Browse";
   public static final String CONST_SYSTEM_LABEL_EXTENSION = "System.Label.Extension";
@@ -286,12 +288,15 @@ public class TextFileInputDialog extends BaseTransformDialog
 
   private Button wMinWidth;
 
+  /** Null when the project has no data catalog. */
+  private Button wGetFromCatalog;
+
   // Wizard info...
   private Vector<ITextFileInputField> fields;
 
   private ModifyListener lsMod;
 
-  public static final int[] dateLengths = new int[] {23, 19, 14, 10, 10, 10, 10, 8, 8, 8, 8, 6, 6};
+  public static final int[] dateLengths = {23, 19, 14, 10, 10, 10, 10, 8, 8, 8, 8, 6, 6};
 
   private boolean gotEncodings = false;
 
@@ -354,6 +359,9 @@ public class TextFileInputDialog extends BaseTransformDialog
     wFirstHeader.addListener(SWT.Selection, e -> first(true));
     wGet.addListener(SWT.Selection, e -> get());
     wMinWidth.addListener(SWT.Selection, e -> setMinimalWidth());
+    if (wGetFromCatalog != null) {
+      wGetFromCatalog.addListener(SWT.Selection, e -> getFieldsFromCatalog());
+    }
 
     // Add the file to the list of files...
     SelectionAdapter selA =
@@ -515,8 +523,7 @@ public class TextFileInputDialog extends BaseTransformDialog
       return;
     }
 
-    Collection<ICompressionProvider> compProviders =
-        CompressionProviderFactory.getInstance().getCompressionProviders();
+    CompressionProviderFactory factory = CompressionProviderFactory.getInstance();
 
     for (int i = 0; i < wFilenameList.getItemCount(); i++) {
       String[] fileRecord = wFilenameList.getItem(i);
@@ -524,19 +531,45 @@ public class TextFileInputDialog extends BaseTransformDialog
         continue;
       }
       // Filename is always column 0 (not row index i)
-      String fileExtension = FilenameUtils.getExtension(fileRecord[0]);
-      for (ICompressionProvider provider : compProviders) {
-        if (provider.getDefaultExtension() != null
-            && provider.getDefaultExtension().equals(fileExtension)) {
-          int toBeSelected = ArrayUtils.indexOf(wCompression.getItems(), provider.getName());
-          if (toBeSelected >= 0) {
-            wCompression.select(toBeSelected);
-          }
+      String fileName = fileRecord[0];
+
+      // Prefer magic-byte detection when the file is readable, then fall back to extension.
+      CompressionFormat format = detectFormat(factory, fileName);
+      if (format == null) {
+        String fileExtension = FilenameUtils.getExtension(fileName);
+        format =
+            factory.getFormats().stream()
+                .filter(f -> fileExtension.equalsIgnoreCase(f.extension()))
+                .findFirst()
+                .orElse(null);
+      }
+      if (format != null) {
+        int toBeSelected = ArrayUtils.indexOf(wCompression.getItems(), format.name());
+        if (toBeSelected >= 0) {
+          wCompression.select(toBeSelected);
           return;
         }
       }
     }
-    // No matching compressed extension: leave compression as None/empty (do not force select).
+    // No matching compressed format: leave compression as None/empty (do not force select).
+  }
+
+  /**
+   * Detects the compression format of a file by its magic bytes; {@code null} when not readable or
+   * unrecognized.
+   */
+  private CompressionFormat detectFormat(CompressionProviderFactory factory, String fileName) {
+    try (FileObject file = HopVfs.getFileObject(fileName);
+        InputStream in = HopVfs.getInputStream(file)) {
+      String key = factory.detectCompressionFormat(in);
+      if (key == null) {
+        return null;
+      }
+      return factory.getFormat(key);
+    } catch (Exception e) {
+      // Not readable or detection failed: fall back to extension matching in the caller
+      return null;
+    }
   }
 
   private void showFiles() {
@@ -827,29 +860,28 @@ public class TextFileInputDialog extends BaseTransformDialog
     fdAccepting.bottom = new FormAttachment(wFirstHeader, -margin);
     gAccepting.setLayoutData(fdAccepting);
 
-    ColumnInfo[] colinfo =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.FileDirColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.WildcardColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.Files.ExcludeWildcard.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.RequiredColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              YES_NO_COMBO),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.IncludeSubDirs.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              YES_NO_COMBO)
-        };
+    ColumnInfo[] colinfo = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.FileDirColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.WildcardColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.Files.ExcludeWildcard.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.RequiredColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          YES_NO_COMBO),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.IncludeSubDirs.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          YES_NO_COMBO)
+    };
 
     colinfo[0].setUsingVariables(true);
     colinfo[1].setToolTip(BaseMessages.getString(PKG, "TextFileInputDialog.RegExpColumn.Column"));
@@ -1231,7 +1263,10 @@ public class TextFileInputDialog extends BaseTransformDialog
     wCompression.setToolTipText(
         BaseMessages.getString(PKG, "TextFileInputDialog.Compression.Tooltip"));
     PropsUi.setLook(wCompression);
-    wCompression.setItems(CompressionProviderFactory.getInstance().getCompressionProviderNames());
+    wCompression.setItems(
+        CompressionProviderFactory.getInstance().getInputFormats().stream()
+            .map(CompressionFormat::name)
+            .toArray(String[]::new));
 
     wCompression.addModifyListener(lsMod);
     FormData fdCompression = new FormData();
@@ -1932,25 +1967,24 @@ public class TextFileInputDialog extends BaseTransformDialog
 
     final int FilterRows = input.getFilters().size();
 
-    ColumnInfo[] colInfos =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.FilterStringColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.FilterPositionColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.StopOnFilterColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              YES_NO_COMBO),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.FilterPositiveColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              YES_NO_COMBO)
-        };
+    ColumnInfo[] colInfos = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.FilterStringColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.FilterPositionColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.StopOnFilterColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          YES_NO_COMBO),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.FilterPositiveColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          YES_NO_COMBO)
+    };
 
     colInfos[2].setToolTip(
         BaseMessages.getString(PKG, "TextFileInputDialog.StopOnFilterColumn.Tooltip"));
@@ -2096,64 +2130,63 @@ public class TextFileInputDialog extends BaseTransformDialog
 
     final int FieldsRows = input.getInputFields().size();
 
-    ColumnInfo[] colInfos =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.NameColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.TypeColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames()),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.FormatColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_FORMAT,
-              2),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.PositionColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.LengthColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.PrecisionColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.CurrencyColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.DecimalColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.GroupColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.NullIfColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.IfNullColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.TrimTypeColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaBase.trimTypeDesc),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "TextFileInputDialog.RepeatColumn.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              new String[] {
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
-              },
-              true)
-        };
+    ColumnInfo[] colInfos = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.NameColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.TypeColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames()),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.FormatColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_FORMAT,
+          2),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.PositionColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.LengthColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.PrecisionColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.CurrencyColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.DecimalColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.GroupColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.NullIfColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.IfNullColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.TrimTypeColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaBase.trimTypeDesc),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "TextFileInputDialog.RepeatColumn.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          new String[] {
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
+          },
+          true)
+    };
     colInfos[0].setNamingSchemeType(NamingSchemeTypes.HOP_FIELD);
 
     colInfos[12].setToolTip(
@@ -2183,7 +2216,16 @@ public class TextFileInputDialog extends BaseTransformDialog
     fdFieldsComp.bottom = new FormAttachment(100, 0);
     wFieldsComp.setLayoutData(fdFieldsComp);
 
-    setButtonPositions(new Button[] {wGet, wMinWidth}, margin, null);
+    if (CatalogFieldsDialog.isAvailable(metadataProvider)) {
+      wGetFromCatalog = new Button(wFieldsComp, SWT.PUSH);
+      wGetFromCatalog.setText(
+          BaseMessages.getString(PKG, "TextFileInputDialog.GetFieldsFromCatalog.Button"));
+      wGetFromCatalog.setToolTipText(
+          BaseMessages.getString(PKG, "TextFileInputDialog.GetFieldsFromCatalog.Tooltip"));
+      setButtonPositions(new Button[] {wGet, wGetFromCatalog, wMinWidth}, margin, null);
+    } else {
+      setButtonPositions(new Button[] {wGet, wMinWidth}, margin, null);
+    }
 
     wFieldsComp.layout();
     wFieldsTab.setControl(wFieldsComp);
@@ -2368,6 +2410,9 @@ public class TextFileInputDialog extends BaseTransformDialog
     wFields.setEnabled(!wIgnoreFields.getSelection());
     wGet.setEnabled(!wIgnoreFields.getSelection());
     wMinWidth.setEnabled(!wIgnoreFields.getSelection());
+    if (wGetFromCatalog != null) {
+      wGetFromCatalog.setEnabled(!wIgnoreFields.getSelection());
+    }
 
     setParallelFlags();
   }
@@ -2463,7 +2508,15 @@ public class TextFileInputDialog extends BaseTransformDialog
     wLayoutPaged.setSelection(meta.getContent().isLayoutPaged());
     wNrLinesPerPage.setText("" + meta.getContent().getNrLinesPerPage());
     wNrLinesDocHeader.setText("" + meta.getContent().getNrLinesDocHeader());
-    wCompression.setText(Const.NVL(meta.getContent().getFileCompression(), ""));
+    String compression = Const.NVL(meta.getContent().getFileCompression(), "");
+    wCompression.setText(compression);
+    if (!Utils.isEmpty(compression)
+        && ArrayUtils.indexOf(wCompression.getItems(), compression) < 0) {
+      // preserve a stored value that is not in the current format list (e.g. a legacy or
+      // extension format), otherwise getInfo() would silently wipe it
+      wCompression.add(compression);
+      wCompression.select(wCompression.getItemCount() - 1);
+    }
     wNoempty.setSelection(meta.getContent().isNoEmptyLines());
     wInclFilename.setSelection(meta.getContent().isIncludeFilename());
     wInclRownum.setSelection(meta.getContent().isIncludeRowNumber());
@@ -3186,6 +3239,55 @@ public class TextFileInputDialog extends BaseTransformDialog
     Collections.sort(fields);
 
     return fields;
+  }
+
+  /** Fills the fields from the schema a data catalog has for the first file. */
+  private void getFieldsFromCatalog() {
+    CatalogFieldsDialog.getFields(
+        shell,
+        variables,
+        metadataProvider,
+        new CatalogDataset(CatalogDatasetType.FILE, null, null, firstFileForCatalog()),
+        wFields,
+        1,
+        2,
+        5,
+        6);
+  }
+
+  /**
+   * The file of the first file row, for the catalog to look up. A row without a wildcard is the
+   * file itself and needs no file system call. A row with a wildcard names a folder, so only that
+   * one folder is listed, without its subfolders, and the first matching file is taken, the way
+   * lineage names it. When that finds nothing or fails, the row as entered is used: the person can
+   * still change the dataset name in the catalog dialog.
+   */
+  private String firstFileForCatalog() {
+    if (wFilenameList.getItemCount() <= 0) {
+      return null;
+    }
+    String[] fileRecord = wFilenameList.getItem(0);
+    String entered = fileRecord == null || fileRecord.length == 0 ? null : fileRecord[0];
+    if (Utils.isEmpty(entered)) {
+      return null;
+    }
+    String mask = fileRecord.length > 1 ? fileRecord[1] : null;
+    if (Utils.isEmpty(mask)) {
+      return entered;
+    }
+    try {
+      InputFile firstRow = new InputFile();
+      firstRow.setFileName(entered);
+      firstRow.setFileMask(mask);
+      firstRow.setExcludeFileMask(fileRecord.length > 2 ? fileRecord[2] : null);
+      firstRow.setFileRequired(false);
+      firstRow.setIncludeSubFolders(false);
+      List<FileObject> files =
+          FileInputList.createFileList(variables, List.of(firstRow)).getFiles();
+      return files.isEmpty() ? entered : files.get(0).getName().getURI();
+    } catch (Exception e) {
+      return entered;
+    }
   }
 
   /** Sets the input width to minimal width... */

@@ -56,7 +56,7 @@ class HopXmlSupportTest {
   }
 
   @Test
-  void serializeConfigRedactsSecretBearingTags() throws Exception {
+  void serializeConfigRedactsSecretBearingTags() {
     String xml =
         """
         <transform>
@@ -79,5 +79,21 @@ class HopXmlSupportTest {
     // Non-secret content, including a field literally named with "keys", survives.
     assertTrue(text.contains("localhost"), text);
     assertTrue(text.contains("customer_id"), text);
+  }
+
+  @Test
+  void transformNamedLikeACredentialKeepsItsSettings() {
+    String xml =
+        """
+        <transform>
+          <name>Get API token</name>
+          <type>Dummy</type>
+          <value>keep-me</value>
+        </transform>
+        """;
+    Document doc = HopXmlSupport.parseDocument(xml);
+    String text = HopXmlSupport.serializeConfig(doc.getDocumentElement());
+
+    assertTrue(text.contains("keep-me"), text);
   }
 }

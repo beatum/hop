@@ -40,6 +40,7 @@ See also:
 * The xref:workflow/actions/pipeline.adoc[Pipeline action] that executes a pipeline from a workflow.
 * The xref:pipeline/transforms/workflow-executor.adoc[Workflow Executor transform] that executes a workflow from a pipeline.
 * The xref:pipeline/transforms/pipeline-executor.adoc[Pipeline Executor transform] that executes a sub-pipeline from a pipeline.
+* xref:projects/projects-environments.adoc#_run_a_workflow_from_another_project[Run a workflow from another project] for the variables and metadata that a workflow from another project can use.
 
 == Options
 
@@ -50,6 +51,7 @@ See also:
 |Option|Description
 |Action name|Name of the action.
 |Workflow Filename a|Specify the XML file name of the workflow to execute. Click to browse through your local files.
+Click *Open* to open it in Hop Gui. When the dialog has unsaved changes, Hop first asks whether to save them.
 
 The selected workflow will automatically converted to a path relative to your `+${PROJECT_HOME}+`.
 

@@ -52,6 +52,7 @@ import org.apache.hop.ui.core.dialog.MessageBox;
 import org.apache.hop.ui.core.dialog.PreviewRowsDialog;
 import org.apache.hop.ui.core.gui.GuiResource;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
 import org.apache.hop.ui.pipeline.dialog.PipelinePreviewProgressDialog;
@@ -268,7 +269,7 @@ public class JsonNormalizeInputDialog extends BaseTransformDialog {
                       BaseMessages.getString(
                           JsonInputMeta.class, "JsonInputDialog.FilesReadSelection.DialogTitle"),
                       BaseMessages.getString(
-                          PKG, "JsonInputDialog.FilesReadSelection.DialogMessage"));
+                          PKG, "JsonNormalizeInputDialog.FilesReadSelection.DialogMessage"));
               esd.setViewOnly();
               esd.open();
             } else {
@@ -357,70 +358,61 @@ public class JsonNormalizeInputDialog extends BaseTransformDialog {
 
     final int FieldsRows = input.getInputFields().size();
 
-    ColumnInfo[] colInfos =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Name.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Path.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Type.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames(),
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Format.Column"),
-              ColumnInfo.COLUMN_TYPE_FORMAT,
-              3),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Length.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Precision.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Currency.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Decimal.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Group.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.TrimType.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaBase.trimTypeDesc,
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(
-                  JsonInputMeta.class, "JsonInputDialog.FieldsTable.Repeat.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              new String[] {
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
-              },
-              true),
-        };
+    ColumnInfo[] colInfos = {
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Name.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Path.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Type.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames(),
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Format.Column"),
+          ColumnInfo.COLUMN_TYPE_FORMAT,
+          3),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Length.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(
+              JsonInputMeta.class, "JsonInputDialog.FieldsTable.Precision.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(
+              JsonInputMeta.class, "JsonInputDialog.FieldsTable.Currency.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Decimal.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Group.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(
+              JsonInputMeta.class, "JsonInputDialog.FieldsTable.TrimType.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaBase.trimTypeDesc,
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(JsonInputMeta.class, "JsonInputDialog.FieldsTable.Repeat.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          new String[] {
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
+          },
+          true),
+    };
 
     colInfos[0].setUsingVariables(true);
     colInfos[0].setToolTip(
@@ -1222,15 +1214,9 @@ public class JsonNormalizeInputDialog extends BaseTransformDialog {
 
   private void setSourceStreamField(boolean isShowErrorDialog) {
     try {
-      String value = wFieldValue.getText();
-      wFieldValue.removeAll();
-
       IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
       if (r != null) {
-        wFieldValue.setItems(r.getFieldNames());
-      }
-      if (value != null) {
-        wFieldValue.setText(value);
+        ComboItems.setItemsKeepingText(wFieldValue, r.getFieldNames());
       }
     } catch (HopException ke) {
       if (!isShowErrorDialog) {

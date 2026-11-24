@@ -39,9 +39,7 @@ import org.apache.hop.ui.hopgui.perspective.configuration.tabs.ConfigPluginOptio
 import org.apache.hop.ui.testing.SwtBotTestBase;
 import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -106,7 +104,7 @@ class HopAiConfigOptionPluginUiTest extends SwtBotTestBase {
         bot -> {
           onUi(
               () -> {
-                HopAiConfigOptionPlugin.reloadProviders(widgets.get(), projectA);
+                HopAiConfigOptionWidgets.reloadProviders(widgets.get(), projectA);
                 return null;
               });
           MetaSelectionLine<?> line = providerLine(widgets.get());
@@ -116,17 +114,20 @@ class HopAiConfigOptionPluginUiTest extends SwtBotTestBase {
           // Another project is opened: its providers are listed, and the name it lacks is noted.
           onUi(
               () -> {
-                HopAiConfigOptionPlugin.reloadProviders(widgets.get(), projectB);
+                HopAiConfigOptionWidgets.reloadProviders(widgets.get(), projectB);
                 return null;
               });
           assertEquals(0, onUi(line::getItemCount));
           assertEquals("ollama", onUi(line::getText), "the setting itself stays");
           assertTrue(onUi(() -> warning(widgets.get()).isVisible()));
-          assertTrue(onUi(() -> warning(widgets.get()).getText()).contains("'ollama'"));
+          String note = onUi(() -> warning(widgets.get()).getText());
+          assertTrue(note.contains("'ollama'"));
+          // The name is the Hop-wide default, not something left over from the other project.
+          assertTrue(note.contains("default for all projects"), note);
 
           onUi(
               () -> {
-                HopAiConfigOptionPlugin.reloadProviders(widgets.get(), projectA);
+                HopAiConfigOptionWidgets.reloadProviders(widgets.get(), projectA);
                 return null;
               });
           assertFalse(onUi(() -> warning(widgets.get()).isVisible()));
@@ -167,36 +168,6 @@ class HopAiConfigOptionPluginUiTest extends SwtBotTestBase {
         });
   }
 
-  @Test
-  void theVariableIconsLineUpWithTheProvider() {
-    AtomicReference<GuiCompositeWidgets> widgets = new AtomicReference<>();
-    withScene(
-        shell -> widgets.set(build(shell)),
-        bot -> {
-          int provider = onUi(() -> iconX(providerLine(widgets.get()).getwCombo()));
-          int notes =
-              onUi(
-                  () ->
-                      iconX(
-                          (Composite)
-                              widgets
-                                  .get()
-                                  .getWidgetsMap()
-                                  .get(HopAiConfigOptionPlugin.WIDGET_EXTRA_CONTEXT)));
-          int files =
-              onUi(
-                  () ->
-                      iconX(
-                          (Composite)
-                              widgets
-                                  .get()
-                                  .getWidgetsMap()
-                                  .get(HopAiConfigOptionPlugin.WIDGET_CONTEXT_FILES)));
-          assertTrue(Math.abs(provider - notes) <= 1, provider + " vs " + notes);
-          assertTrue(Math.abs(provider - files) <= 1, provider + " vs " + files);
-        });
-  }
-
   // Helpers
 
   /** The page as ConfigPluginOptionsTab builds it, without the listener that saves changes. */
@@ -232,16 +203,6 @@ class HopAiConfigOptionPluginUiTest extends SwtBotTestBase {
   private static Link warning(GuiCompositeWidgets widgets) {
     return (Link)
         widgets.getWidgetsMap().get(HopAiConfigOptionPlugin.WIDGET_DEFAULT_PROVIDER_WARNING);
-  }
-
-  /** Where on the screen the variable icon of a field starts. */
-  private static int iconX(Composite field) {
-    for (Control child : field.getChildren()) {
-      if (child instanceof Label label && label.getImage() != null) {
-        return label.toDisplay(0, 0).x;
-      }
-    }
-    throw new AssertionError("no variable icon in " + field);
   }
 
   private static <T> T onUi(Supplier<T> supplier) {

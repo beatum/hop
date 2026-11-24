@@ -556,8 +556,7 @@ public class ActionZipFile extends ActionBase implements Cloneable, IAction {
                       toString());
               result.getResultFiles().put(resultFile.getFile().toString(), resultFile);
             }
-
-            successResult = true;
+            // Keep successResult from zip / after-zip delete-or-move; do not force true.
           }
         }
       } catch (Exception e) {
@@ -916,6 +915,7 @@ public class ActionZipFile extends ActionBase implements Cloneable, IAction {
     }
     if (fromPrevious && rows != null) {
       try {
+        boolean anyZipped = false;
         for (int iteration = 0;
             iteration < rows.size() && !parentWorkflow.isStopped();
             iteration++) {
@@ -947,12 +947,19 @@ public class ActionZipFile extends ActionBase implements Cloneable, IAction {
                   createParentFolder)) {
                 return errorResult(result);
               }
+              anyZipped = true;
             } else {
               logError("destination zip filename is empty! Ignoring row...");
             }
           } else {
             logError("Target directory is empty! Ignoring row...");
           }
+        }
+        if (anyZipped) {
+          result.setResult(true);
+        } else {
+          // No row produced a zip (empty list or only empty fields) — do not inherit previous.
+          return errorResult(result);
         }
       } catch (Exception e) {
         logError("Error during process!", e);
@@ -991,6 +998,7 @@ public class ActionZipFile extends ActionBase implements Cloneable, IAction {
         }
       } else {
         logError("Source folder/file is empty! Ignoring row...");
+        return errorResult(result);
       }
     }
 
@@ -1087,8 +1095,8 @@ public class ActionZipFile extends ActionBase implements Cloneable, IAction {
   /** Helper class providing pattern restrictions for file names to be zipped */
   public static class ZipJobEntryPatternFileSelector implements FileSelector {
 
-    private Pattern pattern;
-    private Pattern patternExclude;
+    private final Pattern pattern;
+    private final Pattern patternExclude;
 
     public ZipJobEntryPatternFileSelector(Pattern pattern, Pattern patternExclude) {
       this.pattern = pattern;

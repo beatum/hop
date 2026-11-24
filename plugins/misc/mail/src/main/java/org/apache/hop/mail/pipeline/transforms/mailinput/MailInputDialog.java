@@ -48,6 +48,7 @@ import org.apache.hop.ui.core.dialog.PreviewRowsDialog;
 import org.apache.hop.ui.core.gui.GuiResource;
 import org.apache.hop.ui.core.gui.WindowProperty;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.MetaSelectionLine;
 import org.apache.hop.ui.core.widget.PasswordTextVar;
 import org.apache.hop.ui.core.widget.TableView;
@@ -1205,18 +1206,17 @@ public class MailInputDialog extends BaseTransformDialog {
 
     final int FieldsRows = input.getInputFields().size();
 
-    ColumnInfo[] colinf =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MailInputdialog.FieldsTable.Name.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MailInputdialog.FieldsTable.Column.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              MailInputField.ColumnDesc,
-              true),
-        };
+    ColumnInfo[] colinf = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MailInputdialog.FieldsTable.Name.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MailInputdialog.FieldsTable.Column.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          MailInputField.ColumnDesc,
+          true),
+    };
 
     colinf[0].setUsingVariables(true);
     colinf[0].setToolTip(
@@ -1509,15 +1509,9 @@ public class MailInputDialog extends BaseTransformDialog {
   private void setFolderField() {
     if (!gotPreviousfields) {
       try {
-        String field = wFolderField.getText();
-        wFolderField.removeAll();
-
         IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
         if (r != null) {
-          wFolderField.setItems(r.getFieldNames());
-        }
-        if (field != null) {
-          wFolderField.setText(field);
+          ComboItems.setItemsKeepingText(wFolderField, r.getFieldNames());
         }
       } catch (HopException ke) {
         new ErrorDialog(

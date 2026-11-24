@@ -19,6 +19,7 @@ package org.apache.hop.ai.transforms.embedtext;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
@@ -117,6 +118,46 @@ class EmbedTextMetaTest {
     assertTrue(errorText(check(meta)).contains("Batch size"), errorText(check(meta)));
   }
 
+  /** check() reads the batch size the same way init() does: trimmed, empty means the default. */
+  @Test
+  void acceptsTheBatchSizesThatRun() {
+    for (String batchSize : new String[] {" 32", "32 ", "", "  "}) {
+      EmbedTextMeta meta = completeMeta();
+      meta.setBatchSize(batchSize);
+
+      assertTrue(
+          errorText(check(meta)).isEmpty(), "'" + batchSize + "': " + errorText(check(meta)));
+    }
+  }
+
+  @Test
+  void rejectsAFixedBatchSizeThatIsNotANumber() {
+    EmbedTextMeta meta = completeMeta();
+    meta.setBatchSize("ten");
+
+    assertTrue(
+        errorText(check(meta)).contains("'ten' is not a whole number"), errorText(check(meta)));
+  }
+
+  @Test
+  void saysAWholeNumberThatIsTooLargeIsTooLarge() {
+    EmbedTextMeta meta = completeMeta();
+    meta.setBatchSize("99999999999");
+
+    String errors = errorText(check(meta));
+    assertTrue(errors.contains("'99999999999' is too large"), errors);
+  }
+
+  @Test
+  void acceptsTheLowestIntAsANumberAndRejectsItAsTooSmall() {
+    // The old check used Integer.MIN_VALUE as its 'not a number' marker.
+    EmbedTextMeta meta = completeMeta();
+    meta.setBatchSize(String.valueOf(Integer.MIN_VALUE));
+
+    String errors = errorText(check(meta));
+    assertTrue(errors.contains("at least 1"), errors);
+  }
+
   @Test
   void reportsAMissingProviderAndInputField() {
     EmbedTextMeta meta = new EmbedTextMeta();
@@ -141,8 +182,8 @@ class EmbedTextMetaTest {
       if (field.getAnnotation(HopMetadataProperty.class) == null) {
         continue;
       }
-      assertTrue(
-          field.getAnnotation(GuiWidgetElement.class) != null,
+      assertNotNull(
+          field.getAnnotation(GuiWidgetElement.class),
           "Property "
               + field.getName()
               + " is persisted but has no @GuiWidgetElement, so it is missing from the dialog");

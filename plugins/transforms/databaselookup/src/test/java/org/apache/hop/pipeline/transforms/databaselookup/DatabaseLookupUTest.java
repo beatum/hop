@@ -49,7 +49,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 import org.apache.hop.core.HopEnvironment;
@@ -83,7 +82,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
-import org.mockito.Mockito;
 
 class DatabaseLookupUTest {
   @RegisterExtension
@@ -130,7 +128,7 @@ class DatabaseLookupUTest {
         .thenReturn(null);
     when(rowSet.getRowMeta()).thenReturn(inputRowMeta);
 
-    Mockito.doReturn(rowSet)
+    doReturn(rowSet)
         .when(mockHelper.pipeline)
         .findRowSet(nullable(String.class), anyInt(), nullable(String.class), anyInt());
 
@@ -187,7 +185,7 @@ class DatabaseLookupUTest {
 
     DatabaseLookup lookup =
         new DatabaseLookup(mocks.transformMeta, meta, data, 1, mocks.pipelineMeta, mocks.pipeline);
-    lookup = Mockito.spy(lookup);
+    lookup = spy(lookup);
 
     doReturn(db).when(lookup).getDatabase(dbMeta);
     for (IRowSet rowSet : lookup.getOutputRowSets()) {
@@ -323,8 +321,9 @@ class DatabaseLookupUTest {
 
   private DatabaseLookupData getCreatedData(boolean allEquals) throws Exception {
     Database db = mock(Database.class);
-    when(db.getRows(anyString(), anyInt()))
-        .thenReturn(Collections.singletonList(new Object[] {1L}));
+    ResultSet resultSet = mock(ResultSet.class);
+    when(db.openQuery(anyString())).thenReturn(resultSet);
+    when(db.getRow(resultSet)).thenReturn(new Object[] {1L}, (Object[]) null);
 
     RowMeta returnRowMeta = new RowMeta();
     returnRowMeta.addValueMeta(new ValueMetaInteger());
@@ -385,8 +384,9 @@ class DatabaseLookupUTest {
   @Test
   void createsReadDefaultCache_AndUsesOnlyNeededFieldsFromMeta() throws Exception {
     Database db = mock(Database.class);
-    when(db.getRows(anyString(), anyInt()))
-        .thenReturn(Arrays.asList(new Object[] {1L}, new Object[] {2L}));
+    ResultSet resultSet = mock(ResultSet.class);
+    when(db.openQuery(anyString())).thenReturn(resultSet);
+    when(db.getRow(resultSet)).thenReturn(new Object[] {1L}, new Object[] {2L}, null);
 
     RowMeta returnRowMeta = new RowMeta();
     returnRowMeta.addValueMeta(new ValueMetaInteger());

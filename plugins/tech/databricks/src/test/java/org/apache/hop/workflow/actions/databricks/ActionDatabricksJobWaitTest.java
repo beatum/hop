@@ -71,7 +71,7 @@ class ActionDatabricksJobWaitTest {
     Result result = new Result();
     action.execute(result, 0);
 
-    assertTrue(result.getResult());
+    assertTrue(result.isResult());
     assertEquals("SUCCESS", action.getVariable("DatabricksStatus"));
     assertEquals("55", action.getVariable("DatabricksRunId"));
   }
@@ -86,7 +86,7 @@ class ActionDatabricksJobWaitTest {
 
     Result result = new Result();
     action.execute(result, 0);
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals(1, result.getNrErrors());
   }
 
@@ -105,7 +105,34 @@ class ActionDatabricksJobWaitTest {
 
     Result result = new Result();
     action.execute(result, 0);
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals("FAILED", action.getVariable("DatabricksStatus"));
+  }
+
+  @Test
+  void canceledRunSetsErrorVariable() throws Exception {
+    when(client.getRun(anyLong()))
+        .thenReturn(
+            new DatabricksRunStatus(
+                1L,
+                2L,
+                DatabricksRunLifeCycleState.TERMINATED,
+                "CANCELED",
+                "Run cancelled by user",
+                null));
+
+    ActionDatabricksJobWait action = new ActionDatabricksJobWait("wait");
+    action.setMetadataProvider(metadataProvider);
+    action.setConnectionName("dbx");
+    action.setRunId("1");
+    action.setClientFactory((c, v) -> client);
+
+    Result result = new Result();
+    action.execute(result, 0);
+    assertFalse(result.isResult());
+    assertEquals(1, result.getNrErrors());
+    assertEquals("CANCELED", action.getVariable("DatabricksStatus"));
+    String error = action.getVariable("DatabricksError");
+    assertTrue(error != null && error.contains("Run cancelled by user"), error);
   }
 }

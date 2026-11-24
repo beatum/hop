@@ -19,7 +19,9 @@
 package org.apache.hop.run;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,7 @@ import org.apache.hop.core.config.plugin.IConfigOptions;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.extension.ExtensionPointHandler;
 import org.apache.hop.core.extension.HopExtensionPoint;
+import org.apache.hop.core.json.HopJson;
 import org.apache.hop.core.logging.FileLoggingEventListener;
 import org.apache.hop.core.logging.HopLogStore;
 import org.apache.hop.core.logging.ILogChannel;
@@ -48,6 +51,8 @@ import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.core.variables.Variables;
 import org.apache.hop.core.vfs.HopVfs;
+import org.apache.hop.execution.failure.ExecutionFailures;
+import org.apache.hop.lineage.hub.LineageHub;
 import org.apache.hop.metadata.api.IHasHopMetadataProvider;
 import org.apache.hop.metadata.serializer.multi.MultiMetadataProvider;
 import org.apache.hop.metadata.util.HopMetadataInstance;
@@ -156,6 +161,29 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
               + "this flag is the CLI equivalent of the GUI \"Run anyway\" override.")
   protected boolean allowUnsupported = false;
 
+  @CommandLine.Option(
+      names = {"-swt", "--shutdown-timeout"},
+      description =
+          "The maximum number of seconds to wait for the pipeline or workflow to stop when hop-run "
+              + "receives a termination signal (SIGTERM, SIGINT, SIGHUP), for example from docker "
+              + "stop or Kubernetes. Hop Run stops the run like the Stop button in Hop GUI does. "
+              + "Can also be set with the HOP_RUN_SHUTDOWN_TIMEOUT environment variable.",
+      defaultValue = "${env:HOP_RUN_SHUTDOWN_TIMEOUT:-5}")
+  protected long shutdownTimeout = 5;
+
+  @CommandLine.Option(
+      names = {"-rj", "--result-json"},
+      description =
+          "The file where hop-run writes the outcome of the run as JSON when it ends: whether it"
+              + " succeeded, its counters and, when it failed, why. Experimental.")
+  protected String resultJsonFile;
+
+  /** The pipeline that ran, for the result file. */
+  protected IPipelineEngine<PipelineMeta> pipelineEngine;
+
+  /** The workflow that ran, for the result file. */
+  protected IWorkflowEngine<WorkflowMeta> workflowEngine;
+
   protected IVariables variables;
   protected String realRunConfigurationName;
   protected String realFilename;
@@ -163,6 +191,8 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
   protected ILogChannel log;
   protected MultiMetadataProvider metadataProvider;
   protected boolean finishedWithoutError;
+  protected Exception runError;
+  protected HopRunShutdownHook shutdownHook;
 
   protected HopRunBase() {
     variables = new Variables();
@@ -172,11 +202,27 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
   public void run() {
     validateOptions();
     FileLoggingEventListener fileLoggingEventListener = null;
+    Thread shutdownHookThread = null;
 
     try {
       log = new LogChannel("HopRun");
       log.setLogLevel(determineLogLevel());
       log.logDetailed("Start of Hop Run");
+
+      // Stop the pipeline or workflow like Hop GUI does when the process gets a termination
+      // signal, for example when a container platform moves the pod to another node. Then
+      // deliver the lineage of the run: the JVM exits as soon as the hook returns.
+      //
+      shutdownHook =
+          new HopRunShutdownHook(
+              log,
+              Duration.ofSeconds(Math.max(0L, shutdownTimeout)),
+              () -> LineageHub.getInstance().shutdown());
+      shutdownHookThread = new Thread(shutdownHook, "hop-run-stop-on-shutdown");
+      // The exit hook of the lineage hub waits for this run, so that its end is delivered as
+      // well.
+      LineageHub.getInstance().holdShutdownOnExit(shutdownHook.getRunOver());
+      Runtime.getRuntime().addShutdownHook(shutdownHookThread);
 
       // Allow plugins to modify the elements loaded so far, before a pipeline or workflow is even
       // loaded
@@ -233,13 +279,79 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
       ExtensionPointHandler.callExtensionPoint(
           log, variables, HopExtensionPoint.HopRunEnd.id, this);
     } catch (Exception e) {
+      runError = e;
       throw new ExecutionException(
           cmd, "There was an error during execution of file '" + filename + "'", e);
     } finally {
+      writeResultJson();
       if (fileLoggingEventListener != null) {
         HopLogStore.getAppender().removeLoggingEventListener(fileLoggingEventListener);
       }
+      if (shutdownHook != null) {
+        shutdownHook.runFinished();
+        LineageHub.getInstance().releaseShutdownOnExit(shutdownHook.getRunOver());
+      }
+      if (shutdownHookThread != null) {
+        try {
+          Runtime.getRuntime().removeShutdownHook(shutdownHookThread);
+        } catch (IllegalStateException e) {
+          // The JVM is already shutting down: the hook is running and waits for this run.
+        }
+      }
     }
+  }
+
+  /**
+   * Write the outcome of the run to the file of {@code --result-json}, if one was given. Never
+   * throws: a supervisor that finds no file knows nothing, and the exit code still tells.
+   */
+  protected void writeResultJson() {
+    if (StringUtils.isEmpty(resultJsonFile)) {
+      return;
+    }
+    String realResultFile = variables.resolve(resultJsonFile);
+    try (OutputStream outputStream = HopVfs.getOutputStream(realResultFile, false)) {
+      HopJson.newMapper().writerWithDefaultPrettyPrinter().writeValue(outputStream, buildResult());
+    } catch (Exception e) {
+      if (log != null) {
+        log.logError("Unable to write the result of the run to " + realResultFile, e);
+      }
+    }
+  }
+
+  /** The outcome of the run, as {@code --result-json} writes it. */
+  protected HopRunResult buildResult() {
+    HopRunResult runResult = new HopRunResult();
+    runResult.setFilename(realFilename != null ? realFilename : filename);
+    runResult.setRunConfiguration(realRunConfigurationName);
+    runResult.setSuccess(finishedWithoutError && runError == null);
+    if (pipelineEngine != null) {
+      runResult.setType(HopRunResult.TYPE_PIPELINE);
+      runResult.setName(pipelineEngine.getPipelineMeta().getName());
+      runResult.setExecutionId(pipelineEngine.getLogChannelId());
+      runResult.setStartDate(pipelineEngine.getExecutionStartDate());
+      runResult.setEndDate(pipelineEngine.getExecutionEndDate());
+      runResult.setCountersFrom(pipelineEngine.getResult());
+      runResult.setFailure(pipelineEngine.getRunFailure());
+      runResult.setFailures(pipelineEngine.getFailures());
+    } else if (workflowEngine != null) {
+      runResult.setType(HopRunResult.TYPE_WORKFLOW);
+      runResult.setName(workflowEngine.getWorkflowMeta().getName());
+      runResult.setExecutionId(workflowEngine.getLogChannelId());
+      runResult.setStartDate(workflowEngine.getExecutionStartDate());
+      runResult.setEndDate(workflowEngine.getExecutionEndDate());
+      runResult.setCountersFrom(workflowEngine.getResult());
+      runResult.setFailure(workflowEngine.getRunFailure());
+      runResult.setFailures(workflowEngine.getFailures());
+    } else if (isPipeline()) {
+      runResult.setType(HopRunResult.TYPE_PIPELINE);
+    } else if (isWorkflow()) {
+      runResult.setType(HopRunResult.TYPE_WORKFLOW);
+    }
+    if (runError != null && runResult.getFailure() == null) {
+      runResult.setError(ExecutionFailures.causeOf(runError, variables));
+    }
+    return runResult;
   }
 
   protected void buildVariableSpace() {
@@ -309,6 +421,7 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
       IPipelineEngine<PipelineMeta> pipeline =
           PipelineEngineFactory.createPipelineEngine(
               variables, pipelineRunConfigurationName, metadataProvider, pipelineMeta);
+      pipelineEngine = pipeline;
       pipeline.getPipelineMeta().setInternalHopVariables(pipeline);
       // Do not call initializeFrom(null) here: the factory already initialized the engine from
       // hop-run's variables (project + environment). Re-initializing from null would drop those
@@ -350,6 +463,9 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
       //
       pipeline.prepareExecution();
       pipeline.startThreads();
+      if (shutdownHook != null) {
+        shutdownHook.track(pipeline);
+      }
       pipeline.waitUntilFinished();
       setFinishedWithoutError(pipeline.getResult().getNrErrors() == 0L);
     } catch (Exception e) {
@@ -425,6 +541,7 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
       IWorkflowEngine<WorkflowMeta> workflow =
           WorkflowEngineFactory.createWorkflowEngine(
               variables, runConfigurationName, metadataProvider, workflowMeta, workflowLog);
+      workflowEngine = workflow;
       workflow.getWorkflowMeta().setInternalHopVariables(workflow);
 
       // Propagate the CLI --allow-unsupported flag into the variables map so the engine-side deep
@@ -470,6 +587,9 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
 
       log.logMinimal("Starting workflow: " + workflowMeta.getFilename());
 
+      if (shutdownHook != null) {
+        shutdownHook.track(workflow);
+      }
       workflow.startExecution();
       setFinishedWithoutError(workflow.getResult().isResult());
     } catch (Exception e) {
@@ -645,7 +765,11 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
 
   /**
    * Configure the variables and parameters in the given configuration on the given variable
-   * variables and named parameters
+   * variables and named parameters.
+   *
+   * <p>A declared parameter only gets the value passed with the -p option. Without one, activating
+   * the parameters gives it its default, even when the project, environment or hop-config has a
+   * variable with the same name. Hop Gui and child executions (#8101) do the same (#9003).
    */
   protected void configureParametersAndVariables(
       CommandLine cmd,
@@ -657,20 +781,7 @@ public abstract class HopRunBase implements Runnable, IHasHopMetadataProvider {
     //
     variables.setVariables(configuration.getVariablesMap());
 
-    // By default, we use the value from the current variables map:
-    //
-    for (String key : namedParams.listParameters()) {
-      String value = variables.getVariable(key);
-      if (StringUtils.isNotEmpty(value)) {
-        try {
-          namedParams.setParameterValue(key, value);
-        } catch (UnknownParamException e) {
-          throw new ParameterException(cmd, "Unable to set parameter '" + key + "'", e);
-        }
-      }
-    }
-
-    // Possibly override with the parameter values set by the user (-p option)
+    // Set the parameter values set by the user (-p option)
     //
     for (String key : configuration.getParametersMap().keySet()) {
       String value = configuration.getParametersMap().get(key);

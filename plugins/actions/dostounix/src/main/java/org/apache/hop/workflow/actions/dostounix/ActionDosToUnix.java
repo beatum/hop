@@ -27,7 +27,6 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.Getter;
 import lombok.Setter;
@@ -41,6 +40,7 @@ import org.apache.hop.core.ResultFile;
 import org.apache.hop.core.RowMetaAndData;
 import org.apache.hop.core.annotations.Action;
 import org.apache.hop.core.exception.HopException;
+import org.apache.hop.core.exception.HopValueException;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.i18n.BaseMessages;
@@ -69,14 +69,12 @@ public class ActionDosToUnix extends ActionBase {
   private static final String CONST_SUCCESS_CONDITION_BROKEN =
       "ActionDosToUnix.Error.SuccessConditionbroken";
 
-  public static final String[] ConversionTypeDesc =
-      new String[] {
-        BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.Guess.Label"),
-        BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.DosToUnix.Label"),
-        BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.UnixToDos.Label")
-      };
-  public static final String[] ConversionTypeCode =
-      new String[] {"guess", "dostounix", "unixtodos"};
+  public static final String[] ConversionTypeDesc = {
+    BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.Guess.Label"),
+    BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.DosToUnix.Label"),
+    BaseMessages.getString(PKG, "ActionDosToUnix.ConversionType.UnixToDos.Label")
+  };
+  public static final String[] ConversionTypeCode = {"guess", "dostounix", "unixtodos"};
 
   public static final int CONVERTION_TYPE_GUESS = 0;
   public static final int CONVERTION_TYPE_DOS_TO_UNIX = 1;
@@ -211,7 +209,7 @@ public class ActionDosToUnix extends ActionBase {
       logDetailed(
           BaseMessages.getString(
               PKG,
-              "JobDosToUnix.Log.ArgFromPrevious.Found",
+              "ActionDosToUnix.Log.ArgFromPrevious.Found",
               (rows != null ? rows.size() : 0) + ""));
     }
     if (argFromPrevious && rows != null) {
@@ -230,16 +228,17 @@ public class ActionDosToUnix extends ActionBase {
 
         resultRow = rows.get(iteration);
 
-        // Get source and destination file names, also wildcard
-        String vSourceFileFolderPrevious = resultRow.getString(0, null);
-        String vWildcardPrevious = resultRow.getString(1, null);
-        int conversionType = ActionDosToUnix.getConversionTypeByCode(resultRow.getString(2, null));
+        // Get source file or folder, wildcard and conversion. A missing field counts as empty.
+        String vSourceFileFolderPrevious = getResultRowString(resultRow, 0);
+        String vWildcardPrevious = getResultRowString(resultRow, 1);
+        int conversionType =
+            ActionDosToUnix.getConversionTypeByCode(getResultRowString(resultRow, 2));
 
         if (isDetailed()) {
           logDetailed(
               BaseMessages.getString(
                   PKG,
-                  "JobDosToUnix.Log.ProcessingRow",
+                  "ActionDosToUnix.Log.ProcessingRow",
                   vSourceFileFolderPrevious,
                   vWildcardPrevious));
         }
@@ -283,6 +282,13 @@ public class ActionDosToUnix extends ActionBase {
     displayResults();
 
     return result;
+  }
+
+  private static String getResultRowString(RowMetaAndData row, int index) throws HopValueException {
+    if (index >= row.size()) {
+      return null;
+    }
+    return row.getString(index, null);
   }
 
   private void displayResults() {
@@ -399,7 +405,7 @@ public class ActionDosToUnix extends ActionBase {
         logDebug(
             BaseMessages.getString(
                 PKG,
-                "JobDosToUnix.Log.RenamingTempFile",
+                "ActionDosToUnix.Log.RenamingTempFile",
                 tempFile.getAbsolutePath(),
                 source.getAbsolutePath()));
       }
@@ -501,13 +507,13 @@ public class ActionDosToUnix extends ActionBase {
 
               if (!currentFile.getParent().toString().equals(sourcefilefolder.toString())) {
                 // Not in the Base Folder..Only if include sub folders
-                if (includeSubFolders && getFileWildcard(currentFile.toString(), realWildcard)) {
+                if (includeSubFolders && getFileWildcard(currentFile, realWildcard)) {
                   convertOneFile(currentFile, convertion, result, parentWorkflow);
                 }
 
               } else {
                 // In the base folder
-                if (getFileWildcard(currentFile.toString(), realWildcard)) {
+                if (getFileWildcard(currentFile, realWildcard)) {
                   convertOneFile(currentFile, convertion, result, parentWorkflow);
                 }
               }
@@ -531,7 +537,7 @@ public class ActionDosToUnix extends ActionBase {
       logError(
           BaseMessages.getString(
               PKG,
-              "JobDosToUnix.Error.Exception.Processing",
+              "ActionDosToUnix.Error.Exception.Processing",
               realSourceFilefoldername,
               e.getMessage()));
       // Update Errors
@@ -639,7 +645,7 @@ public class ActionDosToUnix extends ActionBase {
       logError(
           BaseMessages.getString(
               PKG,
-              "JobDosToUnix.Error.AddingToFilenameResult",
+              "ActionDosToUnix.Error.AddingToFilenameResult",
               fileaddentry.toString(),
               e.getMessage()));
     }
@@ -647,24 +653,20 @@ public class ActionDosToUnix extends ActionBase {
 
   /**********************************************************
    *
+   * The wildcard is matched against the file name, like in the other file actions. A match
+   * against the whole path is still accepted, so that existing path patterns keep working.
+   *
    * @param selectedfile
    * @param wildcard
    * @return True if the selectedfile matches the wildcard
    **********************************************************/
-  private boolean getFileWildcard(String selectedfile, String wildcard) {
-    Pattern pattern = null;
-    boolean getIt = true;
-
-    if (!Utils.isEmpty(wildcard)) {
-      pattern = Pattern.compile(wildcard);
-      // First see if the file matches the regular expression!
-      if (pattern != null) {
-        Matcher matcher = pattern.matcher(selectedfile);
-        getIt = matcher.matches();
-      }
+  private boolean getFileWildcard(FileObject selectedfile, String wildcard) {
+    if (Utils.isEmpty(wildcard)) {
+      return true;
     }
-
-    return getIt;
+    Pattern pattern = Pattern.compile(wildcard);
+    return pattern.matcher(selectedfile.getName().getBaseName()).matches()
+        || pattern.matcher(selectedfile.toString()).matches();
   }
 
   @Override

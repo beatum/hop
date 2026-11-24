@@ -107,16 +107,16 @@ public class RedshiftBulkLoaderDialog extends BaseTransformDialog {
 
   private Button wDoMapping;
 
-  private RedshiftBulkLoaderMeta input;
+  private final RedshiftBulkLoaderMeta input;
 
-  private Map<String, Integer> inputFields;
+  private final Map<String, Integer> inputFields;
 
   private ColumnInfo[] ciFields;
 
   private static final String AWS_INHERIT = "Inherit from connection";
   private static final String AWS_CREDENTIALS = "Credentials";
   private static final String AWS_IAM_ROLE = "IAM Role";
-  private String[] awsAuthOptions = new String[] {AWS_INHERIT, AWS_CREDENTIALS, AWS_IAM_ROLE};
+  private final String[] awsAuthOptions = {AWS_INHERIT, AWS_CREDENTIALS, AWS_IAM_ROLE};
 
   private Label wlAwsAuthType;
   private ComboVar wAwsAuthType;
@@ -130,7 +130,7 @@ public class RedshiftBulkLoaderDialog extends BaseTransformDialog {
   private TextVar wAwsIamRole;
 
   /** List of ColumnInfo that should have the field names of the selected database table */
-  private List<ColumnInfo> tableFieldColumns = new ArrayList<>();
+  private final List<ColumnInfo> tableFieldColumns = new ArrayList<>();
 
   /** Constructor. */
   public RedshiftBulkLoaderDialog(
@@ -384,7 +384,7 @@ public class RedshiftBulkLoaderDialog extends BaseTransformDialog {
     wlStreamToS3Csv.setText(
         BaseMessages.getString(PKG, "RedshiftBulkLoaderDialog.StreamCsvToS3.Label"));
     wlStreamToS3Csv.setToolTipText(
-        BaseMessages.getString(PKG, "RedshiftBulkLoaderDialog.StreamCsvToS3.ToolTip"));
+        BaseMessages.getString(PKG, "RedshiftBulkLoaderDialog.StreamCsvToS3.Tooltip"));
     PropsUi.setLook(wlStreamToS3Csv);
     FormData fdlStreamToS3Csv = new FormData();
     fdlStreamToS3Csv.top = new FormAttachment(lastControl, margin);
@@ -394,7 +394,7 @@ public class RedshiftBulkLoaderDialog extends BaseTransformDialog {
 
     wStreamToS3Csv = new Button(wGeneralComp, SWT.CHECK);
     wStreamToS3Csv.setToolTipText(
-        BaseMessages.getString(PKG, "RedshiftBulkLoaderDialog.StreamCsvToS3.ToolTip"));
+        BaseMessages.getString(PKG, "RedshiftBulkLoaderDialog.StreamCsvToS3.Tooltip"));
     PropsUi.setLook(wStreamToS3Csv);
     FormData fdStreamToS3Csv = new FormData();
     fdStreamToS3Csv.top = new FormAttachment(lastControl, margin);

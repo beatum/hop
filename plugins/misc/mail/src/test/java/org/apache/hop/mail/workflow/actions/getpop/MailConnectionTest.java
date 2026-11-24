@@ -16,11 +16,16 @@
  */
 package org.apache.hop.mail.workflow.actions.getpop;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import jakarta.mail.Flags;
 import jakarta.mail.Folder;
+import jakarta.mail.Message;
 import jakarta.mail.MessagingException;
 import jakarta.mail.Store;
 import java.io.File;
@@ -152,21 +157,59 @@ class MailConnectionTest {
         validTargetTestRtn.endsWith("pdi17713-3"),
         "File without extension test failed - expected pdi17713-3.junk as file name");
 
-    try {
-      validTargetTestRtn = MailConnection.findValidTarget(null, "wibble");
-      fail(
-          "Expected an IllegalArgumentException with a null parameter for folderName to findValidTarget");
-    } catch (IllegalArgumentException expected) {
-      // Expect this exception
-    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> MailConnection.findValidTarget(null, "wibble"),
+        "Expected an IllegalArgumentException with a null parameter for folderName to findValidTarget");
 
-    try {
-      validTargetTestRtn = MailConnection.findValidTarget("wibble", null);
-      fail(
-          "Expected an IllegalArgumentException with a null parameter for fileName to findValidTarget");
-    } catch (IllegalArgumentException expected) {
-      // Expect this exception
-    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> MailConnection.findValidTarget("wibble", null),
+        "Expected an IllegalArgumentException with a null parameter for fileName to findValidTarget");
+  }
+
+  /** A message moved on its own counts as moved, not also as deleted. */
+  @Test
+  void moveMessageCountsAsMovedNotDeleted() throws Exception {
+    Message message = Mockito.mock(Message.class);
+    when(conn.b.getMessages()).thenReturn(new Message[] {message});
+    conn.openFolder("a/b", false, true);
+    conn.setDestinationFolder("a/b/c", true);
+    conn.retrieveMessages();
+    conn.fetchNext();
+
+    conn.moveMessage();
+
+    verify(conn.b).copyMessages(new Message[] {message}, conn.c);
+    verify(message).setFlag(Flags.Flag.DELETED, true);
+    assertEquals(1, conn.getMovedMessagesCounter());
+    assertEquals(0, conn.getDeletedMessagesCounter());
+  }
+
+  /** Deleting or moving all messages of several folders adds up the counts of all folders. */
+  @Test
+  void bulkCountersAddUpOverFolders() throws Exception {
+    when(conn.a.getMessages())
+        .thenReturn(new Message[] {Mockito.mock(Message.class), Mockito.mock(Message.class)});
+    when(conn.b.getMessages()).thenReturn(new Message[] {Mockito.mock(Message.class)});
+    conn.setDestinationFolder("a/b/c", true);
+
+    conn.openFolder("a", false, true);
+    conn.retrieveMessages();
+    conn.deleteMessages(true);
+    conn.openFolder("a/b", false, true);
+    conn.retrieveMessages();
+    conn.deleteMessages(true);
+    assertEquals(3, conn.getDeletedMessagesCounter());
+
+    conn.openFolder("a", false, true);
+    conn.retrieveMessages();
+    conn.moveMessages();
+    conn.openFolder("a/b", false, true);
+    conn.retrieveMessages();
+    conn.moveMessages();
+    assertEquals(3, conn.getMovedMessagesCounter());
+    assertEquals(3, conn.getDeletedMessagesCounter());
   }
 
   /** Test {@link MailConnection#folderExists(String)} method. */
@@ -212,12 +255,12 @@ class MailConnectionTest {
           false,
           "junit");
 
-      store = Mockito.mock(Store.class);
+      store = mock(Store.class);
 
-      inbox = Mockito.mock(Folder.class);
-      a = Mockito.mock(Folder.class);
-      b = Mockito.mock(Folder.class);
-      c = Mockito.mock(Folder.class);
+      inbox = mock(Folder.class);
+      a = mock(Folder.class);
+      b = mock(Folder.class);
+      c = mock(Folder.class);
 
       when(a.getFullName()).thenReturn("A");
       when(b.getFullName()).thenReturn("B");

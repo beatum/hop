@@ -17,7 +17,7 @@ under the License.
 :documentationPath: /pipeline/transforms/
 :language: en_US
 :description: The Avro file input transform simply reads Avro records from one or more files. Each record is encapsulated in an Avro field, each value has its own Schema and record.
-:page-engines: Hop Engine=yes, Single Threaded=yes, Native Spark=no, Beam Spark=yes, Beam Flink=yes, Beam Dataflow=yes
+:page-engines: Hop Engine=yes, Single Threaded=yes, Native Spark=yes, Beam Spark=yes, Beam Flink=yes, Beam Dataflow=yes
 :page-marketplace: hop-tech-avro
 
 = image:transforms/icons/avro_input.svg[Avro file input Icon, role="image-doc-icon"] Avro file input
@@ -57,4 +57,8 @@ Note: This name has to be unique in a single pipeline.
 |Specify a positive number to limit the amount of rows read from all files.
 
 |===
+
+== Beam
+
+On a Beam runner each file is read by one worker, and the records are appended to the row that named the file. A positive row limit is the most records that worker emits across the files it reads. A null or empty filename is skipped. The native Spark engine stays excluded.
 

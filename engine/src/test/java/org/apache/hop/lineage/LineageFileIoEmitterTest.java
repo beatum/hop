@@ -17,14 +17,22 @@
 
 package org.apache.hop.lineage;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import org.apache.commons.vfs2.FileObject;
 import org.apache.commons.vfs2.VFS;
 import org.apache.hop.core.logging.ILogChannel;
+import org.apache.hop.core.row.RowMeta;
+import org.apache.hop.core.row.value.ValueMetaInteger;
+import org.apache.hop.core.row.value.ValueMetaString;
 import org.apache.hop.lineage.context.LineageSubjectType;
 import org.apache.hop.lineage.hub.LineageHub;
 import org.apache.hop.lineage.model.FileIoContentSchema;
@@ -50,6 +58,7 @@ class LineageFileIoEmitterTest {
   @Test
   void emitWorkflowActionFileIo_postsFileIoEventToLineageHub() {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     WorkflowMeta meta = new WorkflowMeta();
     meta.setName("wf1");
@@ -122,6 +131,7 @@ class LineageFileIoEmitterTest {
   @Test
   void emitWorkflowActionFileIo_fallsBackToWorkflowLogChannelWhenActionHasNone() {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     WorkflowMeta meta = new WorkflowMeta();
     meta.setName("wf1");
@@ -153,6 +163,7 @@ class LineageFileIoEmitterTest {
   @Test
   void emitWorkflowActionFileIo_withFileObjects_setsUriFromFileName() throws Exception {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     WorkflowMeta meta = new WorkflowMeta();
     meta.setName("wf1");
@@ -197,6 +208,7 @@ class LineageFileIoEmitterTest {
   @Test
   void emitTransformFileIo_withContentSchema_passesPayload() {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     ITransform tr = mock(ITransform.class);
     ILogChannel logCh = mock(ILogChannel.class);
@@ -246,8 +258,29 @@ class LineageFileIoEmitterTest {
   }
 
   @Test
+  void toContentSchema_describesTheRowShapeWithTheFileFormat() {
+    RowMeta rowMeta = new RowMeta();
+    rowMeta.addValueMeta(new ValueMetaString("customer"));
+    rowMeta.addValueMeta(new ValueMetaInteger("id"));
+
+    FileIoContentSchema schema = LineageFileIoEmitter.toContentSchema(rowMeta, "csv");
+
+    assertEquals("csv", schema.getFormatHint());
+    assertEquals(2, schema.getColumns().size());
+    assertEquals("customer", schema.getColumns().get(0).getName());
+    assertEquals("id", schema.getColumns().get(1).getName());
+    // The type name comes from the value-meta plugin registry, which a bare unit test does not
+    // load.
+    assertNotNull(schema.getColumns().get(0).getHopTypeName());
+    assertTrue(schema.getStructureRoots().isEmpty());
+    assertNull(LineageFileIoEmitter.toContentSchema(new RowMeta(), "csv"));
+    assertNull(LineageFileIoEmitter.toContentSchema(null, null));
+  }
+
+  @Test
   void emitTransformFileIo_postsFileIoEventWithTransformContext() throws Exception {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     ITransform tr = mock(ITransform.class);
     ILogChannel logCh = mock(ILogChannel.class);
@@ -301,8 +334,9 @@ class LineageFileIoEmitterTest {
   }
 
   @Test
-  void emitTransformFileIo_stringUris_postsFileIoEvent() throws Exception {
+  void emitTransformFileIo_stringUris_postsFileIoEvent() {
     LineageHub hub = mock(LineageHub.class);
+    when(hub.isEnabled()).thenReturn(true);
 
     ITransform tr = mock(ITransform.class);
     ILogChannel logCh = mock(ILogChannel.class);
@@ -356,6 +390,24 @@ class LineageFileIoEmitterTest {
           null, action, FileIoOperation.DELETE, "file:///a", null, null, false, "x");
     }
 
-    verify(hub, Mockito.never()).emit(Mockito.any());
+    verify(hub, never()).emit(Mockito.any());
+  }
+
+  @Test
+  void emitTransformFileIo_lineageDisabled_skipsTheEventAndTheUriLookup() {
+    LineageHub hub = mock(LineageHub.class);
+    ITransform tr = mock(ITransform.class);
+    FileObject source = mock(FileObject.class);
+
+    try (MockedStatic<LineageHub> staticHub = Mockito.mockStatic(LineageHub.class)) {
+      staticHub.when(LineageHub::getInstance).thenReturn(hub);
+
+      LineageFileIoEmitter.emitTransformFileIo(
+          tr, FileIoOperation.COPY, source, source, 1L, true, null);
+    }
+
+    verify(hub, never()).emit(Mockito.any());
+    // Only asked for its run, to see whether that has a lineage sink of its own.
+    Mockito.verifyNoInteractions(source);
   }
 }

@@ -18,6 +18,8 @@
 
 <dependencies>
     <folder>../../transforms/addsequence</folder>
+    <folder>../../tech/avro</folder>
+    <folder>../../tech/parquet</folder>
     <folder>../../transforms/constant</folder>
     <folder>../../transforms/filterrows</folder>
     <folder>../../transforms/groupby</folder>

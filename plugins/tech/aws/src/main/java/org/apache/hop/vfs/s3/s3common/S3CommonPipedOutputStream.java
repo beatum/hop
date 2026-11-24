@@ -26,10 +26,13 @@ import java.io.PipedOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.hop.core.logging.LogChannel;
@@ -48,10 +51,14 @@ import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
 /** Custom OutputStream that enables chunked uploads into S3 using AWS SDK v2. */
 public class S3CommonPipedOutputStream extends PipedOutputStream {
+  private static final String CONST_ERROR_S3_MULTI_PART_EXCEPTION_CAUGHT =
+      "ERROR.S3MultiPart.ExceptionCaught";
 
   private static final Class<?> PKG = S3CommonPipedOutputStream.class;
 
   public static final int DEFAULT_PART_SIZE = 5 * 1024 * 1024;
+
+  private static final long UPLOAD_RESULT_WAIT_SECONDS = 5;
 
   private final ThreadPoolExecutor executor =
       (ThreadPoolExecutor)
@@ -103,13 +110,52 @@ public class S3CommonPipedOutputStream extends PipedOutputStream {
   @Override
   public void write(int b) throws IOException {
     initializeWrite();
-    super.write(b);
+    try {
+      super.write(b);
+    } catch (IOException e) {
+      throw uploadFailure(e);
+    }
   }
 
   @Override
   public void write(byte[] b, int off, int len) throws IOException {
     initializeWrite();
-    super.write(b, off, len);
+    try {
+      super.write(b, off, len);
+    } catch (IOException e) {
+      throw uploadFailure(e);
+    }
+  }
+
+  /**
+   * A failed upload closes the reading end of the pipe, so the next write fails with "Pipe closed".
+   * Report the upload failure instead. The upload closes the pipe as it finishes, so its result
+   * follows shortly.
+   */
+  private IOException uploadFailure(IOException writeFailure) {
+    if (result == null) {
+      return writeFailure;
+    }
+    try {
+      if (Boolean.FALSE.equals(result.get(UPLOAD_RESULT_WAIT_SECONDS, TimeUnit.SECONDS))) {
+        return new IOException(
+            BaseMessages.getString(PKG, CONST_ERROR_S3_MULTI_PART_EXCEPTION_CAUGHT)
+                + " ("
+                + bucketId
+                + "/"
+                + key
+                + ")",
+            writeFailure);
+      }
+    } catch (ExecutionException e) {
+      return new IOException(
+          "S3 multipart upload failed for " + bucketId + "/" + key, e.getCause());
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (CancellationException | TimeoutException e) {
+      // No upload result to report: the write failure is all there is
+    }
+    return writeFailure;
   }
 
   @Override
@@ -121,7 +167,7 @@ public class S3CommonPipedOutputStream extends PipedOutputStream {
         Boolean ok = result.get();
         if (ok != null && !ok) {
           throw new IOException(
-              BaseMessages.getString(PKG, "ERROR.S3MultiPart.ExceptionCaught")
+              BaseMessages.getString(PKG, CONST_ERROR_S3_MULTI_PART_EXCEPTION_CAUGHT)
                   + " ("
                   + bucketId
                   + "/"
@@ -229,7 +275,7 @@ public class S3CommonPipedOutputStream extends PipedOutputStream {
         returnVal = false;
       } catch (Exception e) {
         LogChannel.GENERAL.logError(
-            BaseMessages.getString(PKG, "ERROR.S3MultiPart.ExceptionCaught"), e);
+            BaseMessages.getString(PKG, CONST_ERROR_S3_MULTI_PART_EXCEPTION_CAUGHT), e);
         if (uploadId != null) {
           try {
             s3.abortMultipartUpload(
@@ -243,7 +289,8 @@ public class S3CommonPipedOutputStream extends PipedOutputStream {
           }
           LogChannel.GENERAL.logError(BaseMessages.getString(PKG, "ERROR.S3MultiPart.Aborted"));
         }
-        returnVal = false;
+        // Rethrow so write() and close() report the S3 error, not just "Pipe closed"
+        throw e;
       }
       return returnVal;
     }

@@ -21,6 +21,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import org.apache.hop.metadata.api.HopMetadataProperty;
 import org.apache.hop.pipeline.transform.BaseTransformMeta;
 import org.apache.hop.pipeline.transform.ITransformMeta;
 import org.apache.hop.pipeline.transform.TransformMeta;
@@ -56,7 +58,7 @@ public class HardcodedSecretRuleTest {
   }
 
   @Test
-  public void reportsOnlyTheFieldsThatActuallyHoldASecret() {
+  void reportsOnlyTheFieldsThatActuallyHoldASecret() {
     List<String> reported = fieldsReportedFor(new FakeTransformMeta());
 
     assertTrue(reported.contains("password"), "a plain password is the point of the rule");
@@ -64,8 +66,72 @@ public class HardcodedSecretRuleTest {
     assertEquals(2, reported.size(), "unexpected findings: " + reported);
   }
 
+  /**
+   * Stands in for transforms whose secrets no name pattern caught: Event Hubs' {@code sasKey}, FTP
+   * Delete's {@code keyFilePass}, Beam Snowflake's {@code privateKey} and the Event Hubs Listener's
+   * {@code storageConnectionString}.
+   *
+   * @see <a href="https://github.com/apache/hop/issues/9500">#9500</a>
+   */
+  public static class StoredAsPasswordMeta extends BaseTransformMeta {
+    @HopMetadataProperty(key = "sas_key", password = true)
+    private String sasKey = "c2FzLWtleQ==";
+
+    @HopMetadataProperty(key = "keyfilepass", password = true)
+    private String keyFilePass = "Encrypted 2be98afc86aa7f2e4cb79ce10df90acde";
+
+    @HopMetadataProperty(key = "private_key")
+    private String privateKey = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC";
+
+    @HopMetadataProperty(key = "storage_connection_string")
+    private String storageConnectionString =
+        "DefaultEndpointsProtocol=https;AccountName=hop;AccountKey=a2V5";
+
+    @HopMetadataProperty(key = "proxy_sas_key", password = true)
+    private String proxySasKey = "${PROXY_SAS_KEY}";
+
+    @HopMetadataProperty(key = "empty_sas_key", password = true)
+    private String emptySasKey = "";
+
+    @HopMetadataProperty(key = "consumer_group_name")
+    private String consumerGroupName = "$Default";
+  }
+
   @Test
-  public void aSecretTakenFromAVariableIsNotAFinding() {
+  void reportsTheFieldsHopStoresAsPasswordsAndTheNewNamePatterns() {
+    List<String> reported =
+        fieldsReportedFor(
+            new StoredAsPasswordMeta(), Map.of(CustomLintRule.PARAMETER_PASSWORD_FIELDS, true));
+
+    assertEquals(
+        List.of("sasKey", "keyFilePass", "privateKey", "storageConnectionString"),
+        reported,
+        "a variable, an empty value and a plain setting are not findings");
+  }
+
+  /** Without passwordFields a rule reads names only, as every rule did before it existed. */
+  @Test
+  void aRuleWithoutPasswordFieldsReadsNamesOnly() {
+    assertEquals(
+        List.of("privateKey", "storageConnectionString"),
+        fieldsReportedFor(new StoredAsPasswordMeta()));
+  }
+
+  /**
+   * A project rule that narrows fieldPatterns on purpose reports what it did before, rather than
+   * every password field as well.
+   */
+  @Test
+  void aRuleThatNarrowsFieldPatternsKeepsItsFindings() {
+    assertEquals(
+        List.of("privateKey"),
+        fieldsReportedFor(
+            new StoredAsPasswordMeta(),
+            Map.of(CustomLintRule.PARAMETER_FIELD_PATTERNS, List.of("privateKey"))));
+  }
+
+  @Test
+  void aSecretTakenFromAVariableIsNotAFinding() {
     assertTrue(
         !fieldsReportedFor(new FakeTransformMeta()).contains("proxyPassword"),
         "${PROXY_PASSWORD} is exactly what the rule asks people to do");
@@ -78,7 +144,7 @@ public class HardcodedSecretRuleTest {
    * @see <a href="https://github.com/apache/hop/issues/8420">#8420</a>
    */
   @Test
-  public void aStaticConstantIsNotAHardcodedSecret() {
+  void aStaticConstantIsNotAHardcodedSecret() {
     assertTrue(
         !fieldsReportedFor(new FakeTransformMeta()).contains("FIELD_PROPERTY_PASSWORD"),
         "a static constant cannot hold a value loaded from the file being linted");
@@ -86,7 +152,7 @@ public class HardcodedSecretRuleTest {
 
   /** The field names that put an error on every Token Replacement and Get Data From XML step. */
   @Test
-  public void aFieldNameThatMerelyMentionsASecretIsNotOne() {
+  void aFieldNameThatMerelyMentionsASecretIsNotOne() {
     List<String> reported = fieldsReportedFor(new FakeTransformMeta());
 
     for (String notASecret :
@@ -102,7 +168,13 @@ public class HardcodedSecretRuleTest {
   }
 
   private static List<String> fieldsReportedFor(ITransformMeta meta) {
+    return fieldsReportedFor(meta, Map.of());
+  }
+
+  private static List<String> fieldsReportedFor(
+      ITransformMeta meta, Map<String, Object> parameters) {
     CustomLintRule rule = new CustomLintRule();
+    rule.getAdditionalParameters().putAll(parameters);
     rule.setId("SEC-002");
     rule.setName("Hardcoded Password or Secret in Transform");
     rule.setSeverity("ERROR");

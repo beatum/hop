@@ -24,15 +24,21 @@ import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.logging.ILogChannel;
 import org.apache.hop.core.logging.LogChannel;
 import org.apache.hop.core.variables.IVariables;
+import org.apache.hop.lineage.metadata.ILineageSinkConfiguration;
 import org.apache.hop.lineage.model.HttpLineagePayload;
 import org.apache.hop.lineage.model.LineageEvent;
 import org.apache.hop.lineage.model.LineageEventKind;
 import org.apache.hop.lineage.plugin.LineageSinkPlugin;
 import org.apache.hop.lineage.spi.ILineageSink;
+import org.apache.hop.lineage.spi.LineageSinkHealth;
 
 /**
  * Hop lineage sink that maps neutral {@link LineageEvent} batches to OpenLineage JSON and POSTs
  * them to an OpenLineage-compatible collector (e.g. Marquez).
+ *
+ * <p>The mapping, the asynchronous queue and the spool are not specific to the OpenLineage HTTP
+ * API: a sink for a collector with an API of its own (DataHub) extends this class and supplies its
+ * own {@link #createEmitter emitter}, which receives the same mapped events.
  */
 @LineageSinkPlugin(
     id = "openlineage",
@@ -40,42 +46,134 @@ import org.apache.hop.lineage.spi.ILineageSink;
     description = "Maps Hop lineage events to OpenLineage JSON and POSTs to a collector")
 public class OpenLineageLineageSink implements ILineageSink {
 
+  /**
+   * Keeps {@link #accept} and {@link #shutdown} apart. The hub gives its worker a few seconds to
+   * stop before it shuts the sinks down, so an {@code accept} can still be mapping a batch then;
+   * the mapper's state is not thread-safe, and shutdown takes the mapper and dispatcher away.
+   */
+  private final Object lock = new Object();
+
   private OpenLineageSinkConfig config;
   private OpenLineageEventMapper mapper;
-  private OpenLineageHttpClient httpClient;
-  private OpenLineageAsyncDispatcher dispatcher;
+  private volatile OpenLineageAsyncDispatcher dispatcher;
+  private OpenLineageSpool spool;
   private ILogChannel log;
+
+  /** The name this sink goes by in its log lines. */
+  protected String sinkName() {
+    return "OpenLineage";
+  }
+
+  /** Reads this sink's configuration. A subclass with variables of its own maps them here. */
+  protected OpenLineageSinkConfig readConfig(IVariables variables) throws HopException {
+    try {
+      return OpenLineageSinkConfig.fromVariables(variables);
+    } catch (IllegalArgumentException e) {
+      throw new HopException(e.getMessage(), e);
+    }
+  }
+
+  /**
+   * How the names of this sink's folders in the spool start. A sink that shares the spool code
+   * gives its own prefix, so it does not replay another sink's events when both are configured with
+   * one folder.
+   */
+  protected String spoolPrefix() {
+    return "";
+  }
+
+  /** Adjusts the mapping before it is built, for a collector that needs a different shape. */
+  protected void configureMapper(OpenLineageEventMapper.Builder builder) {
+    // The OpenLineage HTTP API takes the mapping as configured.
+  }
+
+  /** What delivers the mapped events: an HTTP POST to the collector. */
+  protected OpenLineageEmitter createEmitter(OpenLineageSinkConfig config, ILogChannel log)
+      throws HopException {
+    return new OpenLineageHttpClient(config, log);
+  }
+
+  /** Where the events go, for the start-up log line. */
+  protected String describeTarget(OpenLineageSinkConfig config) {
+    return "url="
+        + config.getCollectorUrl()
+        + ", namespace="
+        + config.getNamespace()
+        + ", producer="
+        + config.getProducer()
+        + ", jobs="
+        + (config.isTransformJobs() ? "per transform (forward propagation)" : "per pipeline")
+        + ", parent facets="
+        + (config.isParentRunsEnabled() ? "on" : "off")
+        + ", file dataset naming="
+        + (config.isFileSpecNaming() ? "spec" : "legacy");
+  }
+
+  /**
+   * Waits until the events handed over so far are delivered, at most {@code timeoutMs}. It stops
+   * waiting as soon as a delivery fails: see {@link #health()} for what went wrong.
+   */
+  public void awaitDelivery(long timeoutMs) throws InterruptedException {
+    OpenLineageAsyncDispatcher current = dispatcher;
+    if (current != null) {
+      current.awaitDrain(timeoutMs);
+    }
+  }
+
+  @Override
+  public LineageSinkHealth health() {
+    OpenLineageAsyncDispatcher current = dispatcher;
+    if (current == null) {
+      return null;
+    }
+    OpenLineageSpool currentSpool = spool;
+    return new LineageSinkHealth(
+        current.getSentCount(),
+        current.getFailedCount(),
+        current.getRejectedCount(),
+        current.getDroppedCount(),
+        current.getWaitingCount(),
+        currentSpool == null ? -1 : currentSpool.getStoredCount(),
+        current.getLastSentMillis(),
+        current.getLastErrorMillis(),
+        current.getLastError());
+  }
+
+  @Override
+  public ILineageSinkConfiguration newConfiguration() {
+    return new OpenLineageSinkConfiguration();
+  }
 
   @Override
   public void init(IVariables variables, ILogChannel log) throws HopException {
     this.log = log;
-    try {
-      this.config = OpenLineageSinkConfig.fromVariables(variables);
-    } catch (IllegalArgumentException e) {
-      throw new HopException(e.getMessage(), e);
-    }
-    this.mapper =
-        new OpenLineageEventMapper(
-            config.getNamespace(),
-            config.getProducer(),
-            RelationalSqlParser.create(config.isSqlParseEnabled(), log),
-            config.isFileSpecNaming());
-    this.httpClient = new OpenLineageHttpClient(config, log);
+    this.config = readConfig(variables);
+    OpenLineageEventMapper.Builder mapperBuilder =
+        OpenLineageEventMapper.builder(config.getNamespace(), config.getProducer())
+            .sqlParser(RelationalSqlParser.create(config.isSqlParseEnabled(), log))
+            .fileSpecNaming(config.isFileSpecNaming())
+            .transformJobs(config.isTransformJobs())
+            .parentRuns(config.isParentRunsEnabled());
+    configureMapper(mapperBuilder);
+    this.mapper = mapperBuilder.build();
+    this.spool =
+        OpenLineageSpool.open(
+            config.getSpoolDirectory(), spoolPrefix(), config.getSpoolMaxBytes(), log);
     this.dispatcher =
         new OpenLineageAsyncDispatcher(
             config.getBufferSize(),
             config.getOverflowPolicy(),
-            httpClient,
+            createEmitter(config, log),
             log,
             config.getMetricsIntervalMs(),
-            config.getEnqueueTimeoutMs());
+            config.getEnqueueTimeoutMs(),
+            spool);
     String msg =
-        "OpenLineage lineage sink initialized: url="
-            + config.getCollectorUrl()
-            + ", namespace="
-            + config.getNamespace()
-            + ", producer="
-            + config.getProducer();
+        sinkName()
+            + " lineage sink initialized: "
+            + describeTarget(config)
+            + ", spool="
+            + (spool == null ? "off" : spool.getLocation());
     log.logBasic(msg);
     // LineageHub log channel is easy to miss in the GUI — mirror to GENERAL.
     LogChannel.GENERAL.logBasic(msg);
@@ -108,36 +206,65 @@ public class OpenLineageLineageSink implements ILineageSink {
     if (copy.isEmpty()) {
       return;
     }
-    List<RunEvent> runEvents = mapper.mapBatch(copy);
-    if (!runEvents.isEmpty()) {
-      dispatcher.enqueueAll(runEvents);
+    synchronized (lock) {
+      if (mapper == null || dispatcher == null) {
+        // Shut down while the hub still had this batch: nothing is left to send it.
+        log.logDetailed(
+            sinkName() + " sink is shut down; " + copy.size() + " lineage event(s) not sent");
+        return;
+      }
+      List<RunEvent> runEvents = mapper.mapBatch(copy);
+      if (!runEvents.isEmpty()) {
+        dispatcher.enqueueAll(runEvents);
+      }
     }
   }
 
   @Override
   public void shutdown() throws HopException {
-    if (dispatcher != null) {
-      long drainMs = config != null ? config.getShutdownDrainMs() : 30_000;
-      try {
-        dispatcher.awaitDrain(drainMs);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      long dropped = dispatcher.getDroppedCount();
-      dispatcher.close();
-      if (httpClient != null) {
-        log.logBasic(
-            "OpenLineage sink metrics: sent="
-                + httpClient.getSuccessCount()
-                + ", failed="
-                + httpClient.getFailureCount()
-                + ", dropped="
-                + dropped);
-      }
-      dispatcher = null;
+    OpenLineageAsyncDispatcher current = dispatcher;
+    if (current != null) {
+      // An accept still handing events over must not wait for buffer capacity while this waits
+      // for it.
+      current.stopWaiting();
     }
-    httpClient = null;
-    mapper = null;
-    config = null;
+    synchronized (lock) {
+      if (dispatcher != null) {
+        // A dataset observation whose run never reported its end has no run event left to carry
+        // it. Send those as standalone events before the queue drains, so that nothing observed is
+        // dropped; with abortOpenRuns, such runs are ended too.
+        List<RunEvent> carriedNowhere = mapper != null ? mapper.flushObservations() : List.of();
+        if (!carriedNowhere.isEmpty()) {
+          log.logBasic(
+              sinkName()
+                  + " sink: "
+                  + carriedNowhere.size()
+                  + " event(s) for runs that never reported their end (their dataset observations,"
+                  + " or the end of the run itself); sending them now");
+          dispatcher.enqueueAll(carriedNowhere);
+        }
+        long drainMs = config != null ? config.getShutdownDrainMs() : 30_000;
+        try {
+          dispatcher.awaitDrain(drainMs);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        dispatcher.close();
+        log.logBasic(
+            sinkName()
+                + " sink metrics: sent="
+                + dispatcher.getSentCount()
+                + ", failed="
+                + dispatcher.getFailedCount()
+                + ", rejected="
+                + dispatcher.getRejectedCount()
+                + ", dropped="
+                + dispatcher.getDroppedCount());
+        dispatcher = null;
+      }
+      mapper = null;
+      config = null;
+      spool = null;
+    }
   }
 }

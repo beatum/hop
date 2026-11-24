@@ -69,7 +69,7 @@ class VfsExplorerStatusTest {
   }
 
   @Test
-  void wrappedMissingClassIsNamedOnTheStatus() throws Exception {
+  void wrappedMissingClassIsNamedOnTheStatus() {
     FileSystemException failure =
         new FileSystemException("Could not list folder", new NoClassDefFoundError("org.acme.Lib"));
     VfsExplorerOperation operation = new VfsExplorerOperation("Listing", "smb://share");
@@ -85,6 +85,19 @@ class VfsExplorerStatusTest {
     VfsExplorerOperation operation = new VfsExplorerOperation("Listing", "file:///tmp");
     operation.fail(new IllegalStateException("folder is gone"));
     assertEquals("folder is gone", operation.getErrorMessage());
+  }
+
+  @Test
+  void aSkippedLinkLoopIsReportedWhenTheCopyEnds() {
+    VfsExplorerOperation operation = new VfsExplorerOperation("Copying", "file:///tmp");
+    operation.progress().linkLoopSkipped("/data/self");
+    operation.complete();
+    assertEquals(VfsExplorerOperation.Status.FAILED, operation.getStatus());
+    assertTrue(operation.getErrorMessage().contains("/data/self"));
+
+    operation.fail(new IllegalStateException("disk full"));
+    assertTrue(operation.getErrorMessage().startsWith("disk full\n"));
+    assertTrue(operation.getErrorMessage().contains("/data/self"));
   }
 
   @Test

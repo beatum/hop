@@ -32,9 +32,9 @@ import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.exception.HopTransformException;
 import org.apache.hop.core.exception.HopValueException;
 import org.apache.hop.core.io.CountingInputStream;
-import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.row.RowDataUtil;
 import org.apache.hop.core.row.RowMeta;
+import org.apache.hop.core.row.value.ValueMetaFactory;
 import org.apache.hop.core.util.StringUtil;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.vfs.HopVfs;
@@ -119,7 +119,7 @@ public class JsonNormalizeInput
       if (isRowLevel()) {
         logRowlevel(
             BaseMessages.getString(
-                PKG, "JsonInput.Log.ReadRow", data.outputRowMeta.getString(outRow)));
+                PKG, "JsonNormalizeInput.Log.ReadRow", data.outputRowMeta.getString(outRow)));
       }
       incrementLinesInput();
       data.rownr++;
@@ -154,7 +154,11 @@ public class JsonNormalizeInput
     data.inputRowMeta = getInputRowMeta();
     if (!meta.isInFields() && data.inputRowMeta == null) {
       data.outputRowMeta = new RowMeta();
-      if (!meta.isDoNotFailIfNoFile() && (data.files == null || data.files.nrOfFiles() == 0)) {
+      if (data.files == null) {
+        // The check below is about the files: have the list before asking how many there are
+        data.files = meta.getFileInputList(this);
+      }
+      if (!meta.isDoNotFailIfNoFile() && data.files.nrOfFiles() == 0) {
         String errMsg = BaseMessages.getString(JsonInputMeta.class, "JsonInput.Log.NoFiles");
         logError(errMsg);
         inputError(errMsg);
@@ -175,7 +179,7 @@ public class JsonNormalizeInput
                   JsonInputMeta.class, "JsonInput.Log.ErrorFindingField", meta.getFieldValue()));
           throw new HopException(
               BaseMessages.getString(
-                  PKG, "JsonInput.Exception.CouldnotFindField", meta.getFieldValue()));
+                  PKG, "JsonNormalizeInput.Exception.CouldnotFindField", meta.getFieldValue()));
         }
       }
 
@@ -188,7 +192,7 @@ public class JsonNormalizeInput
     }
     meta.getFields(data.outputRowMeta, getTransformName(), null, null, this, metadataProvider);
 
-    data.convertRowMeta = data.outputRowMeta.cloneToType(IValueMeta.TYPE_STRING);
+    data.convertRowMeta = ValueMetaFactory.createParseRowMeta(data.outputRowMeta);
 
     NormalizeInputsReader readerFactory =
         new NormalizeInputsReader(this, meta, data, new InputErrorHandler());
@@ -316,7 +320,7 @@ public class JsonNormalizeInput
       String msg =
           BaseMessages.getString(
               PKG,
-              "JsonInput.Log.UnableToOpenFile",
+              "JsonNormalizeInput.Log.UnableToOpenFile",
               "" + data.filenr,
               file.toString(),
               e.toString());

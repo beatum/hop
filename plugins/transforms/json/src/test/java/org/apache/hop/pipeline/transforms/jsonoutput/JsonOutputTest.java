@@ -71,7 +71,6 @@ import org.apache.hop.pipeline.transforms.dummy.DummyMeta;
 import org.apache.hop.pipeline.transforms.mock.TransformMockHelper;
 import org.apache.hop.pipeline.transforms.rowgenerator.GeneratorField;
 import org.apache.hop.pipeline.transforms.rowgenerator.RowGeneratorMeta;
-import org.json.simple.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -136,16 +135,16 @@ class JsonOutputTest {
 
     IRowMeta rowMetaInterface = createResultRowMeta();
 
-    Object[] r1 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r2 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r3 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r4 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r5 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r6 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r7 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r8 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r9 = new Object[] {1L, "Orlando", "Florida"};
-    Object[] r10 = new Object[] {1L, "Orlando", "Florida"};
+    Object[] r1 = {1L, "Orlando", "Florida"};
+    Object[] r2 = {1L, "Orlando", "Florida"};
+    Object[] r3 = {1L, "Orlando", "Florida"};
+    Object[] r4 = {1L, "Orlando", "Florida"};
+    Object[] r5 = {1L, "Orlando", "Florida"};
+    Object[] r6 = {1L, "Orlando", "Florida"};
+    Object[] r7 = {1L, "Orlando", "Florida"};
+    Object[] r8 = {1L, "Orlando", "Florida"};
+    Object[] r9 = {1L, "Orlando", "Florida"};
+    Object[] r10 = {1L, "Orlando", "Florida"};
 
     list.add(new RowMetaAndData(rowMetaInterface, r1));
     list.add(new RowMetaAndData(rowMetaInterface, r2));
@@ -178,7 +177,7 @@ class JsonOutputTest {
   public List<RowMetaAndData> createData() {
     List<RowMetaAndData> list = new ArrayList<>();
     IRowMeta rowMetaInterface = createIRowMeta();
-    Object[] r1 = new Object[] {};
+    Object[] r1 = {};
     list.add(new RowMetaAndData(rowMetaInterface, r1));
     return list;
   }
@@ -380,9 +379,9 @@ class JsonOutputTest {
 
     JsonOutputData transformData = new JsonOutputData();
     transformData.writeToFile = true;
-    JSONObject jsonObject = new JSONObject();
-    jsonObject.put("key", "value");
-    transformData.ja.add(jsonObject);
+    // one row is waiting to be written
+    transformData.block.append("{\"data\":[{\"key\":\"value\"}");
+    transformData.blockRows = 1;
     transformData.writer = mock(Writer.class);
 
     JsonOutput transform =

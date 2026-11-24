@@ -43,6 +43,7 @@ import org.jetbrains.annotations.Nullable;
 
 public class SynchronizeAfterMerge
     extends BaseTransform<SynchronizeAfterMergeMeta, SynchronizeAfterMergeData> {
+  private static final String CONST_SUYNC002 = "SUYNC002";
 
   private static final Class<?> PKG = SynchronizeAfterMergeMeta.class;
   public static final String CONST_IS_NULL = "IS NULL";
@@ -140,16 +141,7 @@ public class SynchronizeAfterMerge
           }
         }
 
-        // For PG & GP, we add a savepoint before the row.
-        // Then revert to the savepoint afterwards... (not a transaction, so hopefully still fast)
-        //
-        if (data.specialErrorHandling && data.supportsSavePoints) {
-          data.savepoint = data.db.setSavepoint();
-        }
-
-        // Set the values on the prepared statement...
-        data.db.setValues(data.insertRowMeta, insertRowData, data.insertStatement);
-        data.db.insertRow(data.insertStatement, data.batchMode);
+        write(data.insertRowMeta, insertRowData, data.insertStatement);
         performInsert = true;
         if (!data.batchMode) {
           incrementLinesOutput();
@@ -287,14 +279,6 @@ public class SynchronizeAfterMerge
               updateRow[j + i] = lookupRow[i];
             }
 
-            // For PG & GP, we add a savepoint before the row.
-            // Then revert to the savepoint afterwards... (not a transaction, so hopefully still
-            // fast)
-            //
-            if (data.specialErrorHandling && data.supportsSavePoints) {
-              data.savepoint = data.db.setSavepoint();
-            }
-            data.db.setValues(data.updateParameterRowMeta, updateRow, data.updateStatement);
             if (isRowLevel()) {
               logRowlevel(
                   BaseMessages.getString(
@@ -303,7 +287,7 @@ public class SynchronizeAfterMerge
                       data.updateParameterRowMeta.getString(updateRow),
                       data.inputRowMeta.getString(row)));
             }
-            data.db.insertRow(data.updateStatement, data.batchMode);
+            write(data.updateParameterRowMeta, updateRow, data.updateStatement);
             performUpdate = true;
             incrementLinesUpdated();
 
@@ -343,14 +327,6 @@ public class SynchronizeAfterMerge
             }
           }
 
-          // For PG & GP, we add a savepoint before the row.
-          // Then revert to the savepoint when things go wrong.
-          // (not a transaction, so hopefully still fast)
-          //
-          if (data.specialErrorHandling && data.supportsSavePoints) {
-            data.savepoint = data.db.setSavepoint();
-          }
-          data.db.setValues(data.deleteParameterRowMeta, deleteRow, data.deleteStatement);
           if (isRowLevel()) {
             logRowlevel(
                 BaseMessages.getString(
@@ -359,7 +335,7 @@ public class SynchronizeAfterMerge
                     data.deleteParameterRowMeta.getString(deleteRow),
                     data.inputRowMeta.getString(row)));
           }
-          data.db.insertRow(data.deleteStatement, data.batchMode);
+          write(data.deleteParameterRowMeta, deleteRow, data.deleteStatement);
           performDelete = true;
           incrementLinesUpdated();
         } else {
@@ -393,12 +369,6 @@ public class SynchronizeAfterMerge
           commitCounter = 0;
         }
         data.commitCounterMap.put(tableName, commitCounter + 1);
-
-        // Release the savepoint if needed
-        //
-        if (data.specialErrorHandling && data.supportsSavePoints && data.releaseSavepoint) {
-          data.db.releaseSavepoint(data.savepoint);
-        }
 
         // Perform a commit if needed
         //
@@ -454,16 +424,8 @@ public class SynchronizeAfterMerge
         if (isRowLevel()) {
           logRowlevel("Written row to error handling : " + getInputRowMeta().getString(row));
         }
-
-        if (data.specialErrorHandling
-            && data.supportsSavePoints
-            && (data.savepoint != null || !data.lookupFailure)) {
-          // do this when savepoint was set, and this is not lookup failure
-          data.db.rollback(data.savepoint);
-          if (data.releaseSavepoint) {
-            data.db.releaseSavepoint(data.savepoint);
-          }
-        }
+        // A failed INSERT, UPDATE or DELETE was already rolled back to its savepoint by
+        // write(). A failed lookup ran no statement that needs undoing.
         sendToErrorRow = true;
         errorMessage = dbe.toString();
       } else {
@@ -485,7 +447,7 @@ public class SynchronizeAfterMerge
           processBatchException(errorMessage, updateCounts, exceptionsList);
         } else {
           // Simply add this row to the error row
-          putError(data.inputRowMeta, row, 1L, errorMessage, null, "SUYNC002");
+          putError(data.inputRowMeta, row, 1L, errorMessage, null, CONST_SUYNC002);
         }
       } else {
         if (!lineSkipped) {
@@ -525,7 +487,31 @@ public class SynchronizeAfterMerge
         } else {
           putError(data.inputRowMeta, row, 1, errorMessage, null, "SUYNC001");
         }
+      } else {
+        // A row goes to the error hop or to the output, never to both.
+        putRow(data.outputRowMeta, row);
       }
+    }
+  }
+
+  /**
+   * Binds and runs the INSERT, UPDATE or DELETE of one row. With a savepoint per row only the
+   * statement is inside it: the commit comes after it, from lookupValues(), as committing would end
+   * the savepoint, and on a connection shared by a transactional pipeline the other transforms wait
+   * while it is open.
+   */
+  private void write(IRowMeta rowMeta, Object[] values, PreparedStatement statement)
+      throws HopException {
+    if (data.useSavepoints) {
+      data.db.runInSavepoint(
+          () -> {
+            data.db.setValues(rowMeta, values, statement);
+            data.db.insertRow(statement, false, false);
+            return null;
+          });
+    } else {
+      data.db.setValues(rowMeta, values, statement);
+      data.db.insertRow(statement, data.batchMode);
     }
   }
 
@@ -615,7 +601,7 @@ public class SynchronizeAfterMerge
           exMessage = exceptions.get(errNr).toString();
           errNr++;
         }
-        putError(data.outputRowMeta, row, 1L, exMessage, null, "SUYNC002");
+        putError(data.outputRowMeta, row, 1L, exMessage, null, CONST_SUYNC002);
       }
     }
 
@@ -625,7 +611,7 @@ public class SynchronizeAfterMerge
     for (int i = counted; i < bufferSize; i++) {
       Object[] row = data.batchBuffer.get(i);
       if (i == counted && updateCounts != null) {
-        putError(data.outputRowMeta, row, 1L, errorMessage, null, "SUYNC002");
+        putError(data.outputRowMeta, row, 1L, errorMessage, null, CONST_SUYNC002);
       } else {
         putError(
             data.outputRowMeta,
@@ -790,10 +776,8 @@ public class SynchronizeAfterMerge
     }
 
     try {
-      lookupValues(nextRow); // add new values to the row in rowset[0].
-      if (!data.batchMode) {
-        putRow(data.outputRowMeta, nextRow); // copy row to output rowset(s)
-      }
+      // Passes the row on to the output or the error hop, in batch mode once it is committed.
+      lookupValues(nextRow);
 
       if (checkFeedback(getLinesRead()) && isDetailed()) {
         logDetailed(
@@ -1019,12 +1003,6 @@ public class SynchronizeAfterMerge
         return false;
       }
 
-      // if we are using Oracle then set releaseSavepoint to false
-      //
-      if (databaseMeta.getIDatabase().isOracleVariant()) {
-        data.releaseSavepoint = false;
-      }
-
       String commitSize = resolve(meta.getCommitSize());
       String expandedCommitSize = Const.expandIntegerString(commitSize);
       data.commitSize =
@@ -1038,8 +1016,6 @@ public class SynchronizeAfterMerge
           getTransformMeta().isDoingErrorHandling()
               && databaseMeta.supportsErrorHandlingOnBatchUpdates();
 
-      data.supportsSavePoints = databaseMeta.getIDatabase().isUseSafePoints();
-
       if (data.batchMode && data.specialErrorHandling) {
         data.batchMode = false;
         if (isBasic()) {
@@ -1051,6 +1027,11 @@ public class SynchronizeAfterMerge
       data.db = new Database(this, this, databaseMeta);
       data.db.connect();
       data.db.setCommit(data.commitSize);
+
+      // A failed statement aborts the whole transaction on PostgreSQL and its look-alikes: with an
+      // error hop every row runs behind a savepoint, so only the failed row is undone.
+      //
+      data.useSavepoints = data.db.isUsingRowSavepoints(getTransformMeta().isDoingErrorHandling());
 
       return true;
     } catch (HopException ke) {

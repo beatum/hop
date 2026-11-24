@@ -24,6 +24,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
@@ -79,11 +80,9 @@ public class ActionEvalFilesMetrics extends ActionBase implements Cloneable, IAc
   public static final String YES = "Y";
   public static final String NO = "N";
 
-  public static final String[] NO_YES =
-      new String[] {
-        BaseMessages.getString(PKG, "System.Combo.No"),
-        BaseMessages.getString(PKG, "System.Combo.Yes")
-      };
+  public static final String[] NO_YES = {
+    BaseMessages.getString(PKG, "System.Combo.No"), BaseMessages.getString(PKG, "System.Combo.Yes")
+  };
 
   @HopMetadataProperty(key = "scale", storeWithCode = true)
   private Scale scale;
@@ -266,7 +265,17 @@ public class ActionEvalFilesMetrics extends ActionBase implements Cloneable, IAc
           Pattern pattern = null;
           String realPattern = resolve(getResultFilenamesWildcard());
           if (!Utils.isEmpty(realPattern)) {
-            pattern = Pattern.compile(realPattern);
+            try {
+              pattern = Pattern.compile(realPattern);
+            } catch (PatternSyntaxException e) {
+              logError(
+                  BaseMessages.getString(
+                      PKG, "ActionEvalFilesMetrics.Error.InvalidWildcard", e.toString()));
+              incrementErrors();
+              result.setResult(false);
+              result.setNrErrors(getNrErrors());
+              return result;
+            }
           }
 
           for (Iterator<ResultFile> it = resultFiles.iterator();

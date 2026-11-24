@@ -49,7 +49,7 @@ import picocli.CommandLine;
  *
  * @see <a href="https://github.com/apache/hop/issues/8826">#8826</a>
  */
-public class ActionRunLinterTest {
+class ActionRunLinterTest {
 
   @TempDir private Path dir;
 
@@ -123,7 +123,7 @@ public class ActionRunLinterTest {
   // ------------------------------------------------------------------ the same as hop lint
 
   @Test
-  public void givesTheSameFindingsAndOutcomeAsHopLint() throws Exception {
+  void givesTheSameFindingsAndOutcomeAsHopLint() throws Exception {
     Path cliReport = dir.resolve("cli.json");
     int exitCode =
         hopLint(new StringBuilder(), "-f", "JSON", "-o", cliReport.toString(), project.toString());
@@ -142,8 +142,151 @@ public class ActionRunLinterTest {
     assertEquals(2, cli.get("summary").get("warnings").asInt(), cli.toString());
 
     assertEquals(1, exitCode);
-    assertFalse(result.getResult(), "hop lint exits 1, so the action fails");
+    assertFalse(result.isResult(), "hop lint exits 1, so the action fails");
     assertEquals(0, result.getNrErrors(), "failing on findings is not an error in the action");
+  }
+
+  /** Runs hop lint; returns what it printed on stdout. */
+  private static String hopLintOutput(String... args) {
+    ByteArrayOutputStream outBytes = new ByteArrayOutputStream();
+    PrintStream systemOut = System.out;
+    PrintStream systemErr = System.err;
+    try {
+      System.setOut(new PrintStream(outBytes, true, StandardCharsets.UTF_8));
+      System.setErr(new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+      new CommandLine(new LintCommand()).execute(args);
+    } finally {
+      System.setOut(systemOut);
+      System.setErr(systemErr);
+    }
+    return outBytes.toString(StandardCharsets.UTF_8);
+  }
+
+  private static List<String> declaredRuleIds(JsonNode run) {
+    List<String> ids = new ArrayList<>();
+    run.get("tool").get("driver").get("rules").forEach(rule -> ids.add(rule.get("id").asText()));
+    return ids;
+  }
+
+  /**
+   * SARIF declared only the rules that found something, and nothing about the run, so a rule that
+   * ran and found nothing read the same as one that was switched off. hop lint and the action both
+   * declare every enabled rule, as --list-rules lists them, and the run's set-up.
+   *
+   * @see <a href="https://github.com/apache/hop/issues/9500">#9500</a>
+   */
+  @Test
+  void sarifDeclaresEveryEnabledRuleAndTheRunAsHopLintDoes() throws Exception {
+    Path cliReport = dir.resolve("cli.sarif");
+    hopLint(new StringBuilder(), "-f", "SARIF", "-o", cliReport.toString(), project.toString());
+    Path actionReport = dir.resolve("action.sarif");
+    ActionRunLinter action = action(project);
+    action.setReportFile(actionReport.toString());
+    action.setReportFormat(LintReportFormat.SARIF);
+    action.execute(new Result(), 0);
+
+    ObjectMapper mapper = new ObjectMapper();
+    JsonNode cli = mapper.readTree(cliReport.toFile()).get("runs").get(0);
+    JsonNode fromAction = mapper.readTree(actionReport.toFile()).get("runs").get(0);
+    assertEquals(cli.get("tool"), fromAction.get("tool"));
+    assertEquals(cli.get("invocations"), fromAction.get("invocations"));
+
+    List<String> enabled = new ArrayList<>();
+    for (String line : hopLintOutput("--list-rules", project.toString()).split("\\R")) {
+      String[] columns = line.trim().split("\\s+");
+      if (columns.length > 1 && "enabled".equals(columns[1])) {
+        enabled.add(columns[0]);
+      }
+    }
+    List<String> declared = declaredRuleIds(cli);
+    assertFalse(enabled.isEmpty());
+    assertEquals(enabled, declared.subList(0, enabled.size()), "every enabled rule, in order");
+    assertTrue(enabled.contains("DB-001"), "a rule with no findings is declared: " + enabled);
+
+    JsonNode invocation = cli.get("invocations").get(0);
+    assertTrue(invocation.get("executionSuccessful").asBoolean());
+    assertEquals(1, invocation.get("exitCode").asInt());
+    JsonNode properties = invocation.get("properties");
+    assertEquals("hop-lint.yml", properties.get("configFile").asText());
+    assertEquals("ERROR", properties.get("failOn").asText());
+    JsonNode core = properties.get("rulePacks").get(0);
+    assertEquals("hop-core", core.get("id").asText());
+    assertEquals(LintRun.toolVersion(), core.get("version").asText());
+  }
+
+  private static JsonNode invocationProperties(Path sarif) throws Exception {
+    return new ObjectMapper()
+        .readTree(sarif.toFile())
+        .get("runs")
+        .get(0)
+        .get("invocations")
+        .get(0)
+        .get("properties");
+  }
+
+  /**
+   * The project's hop-lint.yml and a baseline are usually outside the folder linted. They were
+   * recorded with their absolute paths, so a report kept as evidence carried the developer's home
+   * folder or the CI workspace. hop lint and the action, given the baseline as a file: URL, record
+   * the same relative paths.
+   *
+   * @see <a href="https://github.com/apache/hop/issues/9500">#9500</a>
+   */
+  @Test
+  void sarifRecordsFilesOutsideTheTargetWithoutLocalPaths() throws Exception {
+    Path target = project.resolve("pipelines");
+    Path baseline = dir.resolve("baseline.json");
+    hopLint(new StringBuilder(), "--write-baseline", baseline.toString(), target.toString());
+
+    Path cliReport = dir.resolve("outside-cli.sarif");
+    hopLint(
+        new StringBuilder(),
+        "-f",
+        "SARIF",
+        "-o",
+        cliReport.toString(),
+        "--baseline",
+        baseline.toString(),
+        "--severity",
+        "WARNING",
+        "--max-warnings",
+        "5",
+        target.toString());
+    Path actionReport = dir.resolve("outside-action.sarif");
+    ActionRunLinter action = action(target);
+    action.setBaselineFile(baseline.toUri().toString());
+    action.setMinimumSeverity(LintSeverity.Level.WARNING);
+    action.setMaxWarnings("5");
+    action.setReportFile(actionReport.toString());
+    action.setReportFormat(LintReportFormat.SARIF);
+    action.execute(new Result(), 0);
+
+    JsonNode cli = invocationProperties(cliReport);
+    assertEquals("../hop-lint.yml", cli.get("configFile").asText());
+    assertEquals("../../baseline.json", cli.get("baseline").asText());
+    assertEquals("WARNING", cli.get("severity").asText());
+    assertEquals(5, cli.get("maxWarnings").asInt());
+    assertEquals(cli, invocationProperties(actionReport));
+    for (Path report : List.of(cliReport, actionReport)) {
+      String sarif = Files.readString(report);
+      assertFalse(sarif.contains(dir.toString()), report + " names a local folder: " + sarif);
+    }
+  }
+
+  /** A run with nothing to report still says which rules it ran, and that it passed. */
+  @Test
+  void aCleanRunStillDeclaresItsRules() throws Exception {
+    Path clean = dir.resolve("clean");
+    Files.createDirectories(clean);
+    Path report = dir.resolve("clean.sarif");
+    int exitCode =
+        hopLint(new StringBuilder(), "-f", "SARIF", "-o", report.toString(), clean.toString());
+
+    JsonNode run = new ObjectMapper().readTree(report.toFile()).get("runs").get(0);
+    assertEquals(0, exitCode);
+    assertEquals(0, run.get("results").size());
+    assertTrue(declaredRuleIds(run).contains("SEC-002"), "" + declaredRuleIds(run));
+    assertEquals(0, run.get("invocations").get(0).get("exitCode").asInt());
   }
 
   /**
@@ -151,7 +294,7 @@ public class ActionRunLinterTest {
    * in the report and the baseline of hop lint, so neither matched the action's.
    */
   @Test
-  public void aTargetWithDotDotGivesRelativePaths() throws Exception {
+  void aTargetWithDotDotGivesRelativePaths() throws Exception {
     String target = project.resolve("pipelines").resolve("..").toString();
     Path cliReport = dir.resolve("cli.json");
     hopLint(new StringBuilder(), "-f", "JSON", "-o", cliReport.toString(), target);
@@ -169,11 +312,11 @@ public class ActionRunLinterTest {
     ActionRunLinter action = action(project);
     action.setBaselineFile(baseline.toString());
     action.setFailOn(LintSeverity.FailOn.WARNING);
-    assertTrue(action.execute(new Result(), 0).getResult());
+    assertTrue(action.execute(new Result(), 0).isResult());
   }
 
   @Test
-  public void passesWhereHopLintPasses() {
+  void passesWhereHopLintPasses() {
     int exitCode = hopLint(new StringBuilder(), "--fail-on", "NONE", project.toString());
 
     ActionRunLinter action = action(project);
@@ -181,23 +324,23 @@ public class ActionRunLinterTest {
     Result result = action.execute(new Result(), 0);
 
     assertEquals(0, exitCode);
-    assertTrue(result.getResult());
+    assertTrue(result.isResult());
   }
 
   @Test
-  public void maxWarningsFailsAsInHopLint() {
+  void maxWarningsFailsAsInHopLint() {
     ActionRunLinter action = action(project);
     action.setFailOn(LintSeverity.FailOn.NONE);
 
     action.setMaxWarnings("1");
-    assertFalse(action.execute(new Result(), 0).getResult());
+    assertFalse(action.execute(new Result(), 0).isResult());
     assertEquals(
         1,
         hopLint(
             new StringBuilder(), "--fail-on", "NONE", "--max-warnings", "1", project.toString()));
 
     action.setMaxWarnings("2");
-    assertTrue(action.execute(new Result(), 0).getResult());
+    assertTrue(action.execute(new Result(), 0).isResult());
     assertEquals(
         0,
         hopLint(
@@ -205,7 +348,7 @@ public class ActionRunLinterTest {
   }
 
   @Test
-  public void aBaselineHidesAcceptedFindingsAsInHopLint() throws Exception {
+  void aBaselineHidesAcceptedFindingsAsInHopLint() {
     Path baseline = dir.resolve("baseline.json");
     assertEquals(
         0,
@@ -215,26 +358,26 @@ public class ActionRunLinterTest {
     action.setBaselineFile(baseline.toString());
     Result result = action.execute(new Result(), 0);
 
-    assertTrue(result.getResult(), "every finding is accepted");
+    assertTrue(result.isResult(), "every finding is accepted");
     assertTrue(result.getRows().isEmpty(), result.getRows().toString());
     assertEquals("0", action.getVariable(ActionRunLinter.VAR_ERRORS));
   }
 
   @Test
-  public void aMissingBaselineFailsTheAction() {
+  void aMissingBaselineFailsTheAction() {
     ActionRunLinter action = action(project);
     action.setBaselineFile(dir.resolve("missing.json").toString());
 
     Result result = action.execute(new Result(), 0);
 
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals(1, result.getNrErrors());
   }
 
   // ------------------------------------------------------------------ results
 
   @Test
-  public void oneRowPerFindingAndTheCountsAsVariables() throws Exception {
+  void oneRowPerFindingAndTheCountsAsVariables() throws Exception {
     Path report = dir.resolve("report.sarif");
     ActionRunLinter action = action(project);
     action.setReportFile(report.toString());
@@ -257,12 +400,18 @@ public class ActionRunLinterTest {
     assertEquals("2.1.0", sarif.get("version").asText(), sarif.toString());
     assertEquals(1, result.getResultFilesList().size());
     assertTrue(
-        result.getResultFilesList().get(0).getFile().getName().getPath().endsWith("report.sarif"));
+        result
+            .getResultFilesList()
+            .getFirst()
+            .getFile()
+            .getName()
+            .getPath()
+            .endsWith("report.sarif"));
   }
 
   /** The minimum severity narrows the rows and the report, never the outcome or the counts. */
   @Test
-  public void theMinimumSeverityNarrowsTheRowsOnly() throws Exception {
+  void theMinimumSeverityNarrowsTheRowsOnly() throws Exception {
     ActionRunLinter action = action(project);
     action.setMinimumSeverity(LintSeverity.Level.ERROR);
 
@@ -270,11 +419,11 @@ public class ActionRunLinterTest {
 
     assertEquals(List.of("ERROR"), column(result, "severity"));
     assertEquals("2", action.getVariable(ActionRunLinter.VAR_WARNINGS));
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
   }
 
   @Test
-  public void withoutAReportTheReportVariableIsEmpty() {
+  void withoutAReportTheReportVariableIsEmpty() {
     ActionRunLinter action = action(project);
 
     action.execute(new Result(), 0);
@@ -283,7 +432,7 @@ public class ActionRunLinterTest {
   }
 
   @Test
-  public void metadataIsLeftOutWhenAskedTo() throws Exception {
+  void metadataIsLeftOutWhenAskedTo() throws Exception {
     Files.createDirectories(project.resolve("metadata/rdbms"));
     Files.writeString(project.resolve("metadata/rdbms/broken.json"), "{ not json");
     ActionRunLinter action = action(project);
@@ -303,7 +452,7 @@ public class ActionRunLinterTest {
 
   /** A report under folders that do not exist yet creates them. */
   @Test
-  public void theReportFolderIsCreated() throws Exception {
+  void theReportFolderIsCreated() {
     Path report = dir.resolve("output").resolve("lint").resolve("report.sarif");
     ActionRunLinter action = action(project);
     action.setFailOn(LintSeverity.FailOn.NONE);
@@ -312,7 +461,7 @@ public class ActionRunLinterTest {
     Result result = action.execute(new Result(), 0);
 
     assertEquals(0, result.getNrErrors());
-    assertTrue(result.getResult());
+    assertTrue(result.isResult());
     assertTrue(Files.exists(report), report.toString());
   }
 
@@ -329,7 +478,7 @@ public class ActionRunLinterTest {
    * After a run that fails with an error, the next action must not read an earlier run's counts.
    */
   @Test
-  public void anErrorClearsTheVariablesOfAnEarlierRun() throws Exception {
+  void anErrorClearsTheVariablesOfAnEarlierRun() {
     ActionRunLinter action = action(project);
     action.setReportFile(dir.resolve("report.sarif").toString());
     action.execute(new Result(), 0);
@@ -354,14 +503,14 @@ public class ActionRunLinterTest {
    * project full of errors.
    */
   @Test
-  public void anExplicitRunLintsWhenTheLinterIsSwitchedOff() throws Exception {
+  void anExplicitRunLintsWhenTheLinterIsSwitchedOff() throws Exception {
     LinterConfigPlugin config = LinterConfigPlugin.getInstance();
     config.setLinterEnabled(false);
     config.saveToHopConfig();
     try {
       ActionRunLinter action = action(project);
       Result result = action.execute(new Result(), 0);
-      assertFalse(result.getResult());
+      assertFalse(result.isResult());
       assertEquals("1", action.getVariable(ActionRunLinter.VAR_ERRORS));
 
       assertEquals(1, cliErrors("--fail-on", "NONE", project.toString()));
@@ -375,7 +524,7 @@ public class ActionRunLinterTest {
   // ------------------------------------------------------------------ the target
 
   @Test
-  public void anEmptyTargetLintsTheCurrentProject() {
+  void anEmptyTargetLintsTheCurrentProject() {
     ActionRunLinter action = action(project);
     action.setTarget("");
     action.setVariable("PROJECT_HOME", project.toString());
@@ -386,24 +535,24 @@ public class ActionRunLinterTest {
   }
 
   @Test
-  public void anEmptyTargetOutsideAProjectFails() {
+  void anEmptyTargetOutsideAProjectFails() {
     ActionRunLinter action = action(project);
     action.setTarget("");
 
     Result result = action.execute(new Result(), 0);
 
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals(1, result.getNrErrors());
   }
 
   @Test
-  public void aTargetThatIsNotLocalFails() {
+  void aTargetThatIsNotLocalFails() {
     ActionRunLinter action = action(project);
     action.setTarget("ram:///project");
 
     Result result = action.execute(new Result(), 0);
 
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals(1, result.getNrErrors());
   }
 
@@ -411,7 +560,7 @@ public class ActionRunLinterTest {
 
   /** hop lint --config on a folder was dropped: the run reloaded the project's own hop-lint.yml. */
   @Test
-  public void aConfigFileReplacesTheProjectsOnAFolder() throws Exception {
+  void aConfigFileReplacesTheProjectsOnAFolder() throws Exception {
     Path config = dir.resolve("other-lint.yml");
     Files.writeString(config, "rules:\n  STRUCT-004:\n    enabled: false\n");
     ActionRunLinter action = action(project);
@@ -433,7 +582,7 @@ public class ActionRunLinterTest {
    * the parser's message, in the action and in hop lint alike.
    */
   @Test
-  public void aBrokenProjectConfigurationFailsWithItsOwnMessage() throws Exception {
+  void aBrokenProjectConfigurationFailsWithItsOwnMessage() throws Exception {
     Path clean = dir.resolve("clean");
     Files.createDirectories(clean);
     writePipeline(clean.resolve("only.hpl"));
@@ -442,7 +591,7 @@ public class ActionRunLinterTest {
     ActionRunLinter action = action(clean);
     action.setFailOn(LintSeverity.FailOn.NONE);
     Result result = action.execute(new Result(), 0);
-    assertFalse(result.getResult());
+    assertFalse(result.isResult());
     assertEquals(1, result.getNrErrors());
 
     StringBuilder err = new StringBuilder();

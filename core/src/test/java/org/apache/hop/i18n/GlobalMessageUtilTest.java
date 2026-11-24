@@ -21,7 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Locale;
+import java.util.ResourceBundle;
 import org.apache.hop.junit.rules.RestoreHopEnvironmentExtension;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +56,59 @@ class GlobalMessageUtilTest {
     assertFalse(GlobalMessageUtil.isMissingKey("foo"));
     assertFalse(GlobalMessageUtil.isMissingKey("!"));
     assertFalse(GlobalMessageUtil.isMissingKey(" !"));
+  }
+
+  @Test
+  void bundlesAreOnlyLookedUpAsPropertiesFiles() {
+    assertEquals(
+        ResourceBundle.Control.FORMAT_PROPERTIES,
+        new GlobalMessageUtil.GlobalMessageControl(true).getFormats("any.base.name"));
+  }
+
+  @Test
+  void bundleIsFoundThroughALoaderThatDoesNotDelegateToTheSystemLoader() throws Exception {
+    // A loader without the system class loader as an ancestor: the bundle comes from the retry
+    // on the system class loader
+    ClassLoader isolated = new URLClassLoader(new URL[0], ClassLoader.getPlatformClassLoader());
+    ResourceBundle bundle =
+        new GlobalMessageUtil.GlobalMessageControl(true)
+            .newBundle(
+                GlobalMessages.SYSTEM_BUNDLE_PACKAGE + "." + GlobalMessages.BUNDLE_NAME,
+                Locale.FRANCE,
+                "java.properties",
+                isolated,
+                false);
+    assertEquals("Une certaine valeur {0}", bundle.getString("someKey"));
+  }
+
+  @Test
+  void noRetryOnTheSystemLoaderForALoaderThatDelegatesToIt() {
+    ClassLoader system = ClassLoader.getSystemClassLoader();
+    assertTrue(GlobalMessageUtil.GlobalMessageControl.delegatesToSystemClassLoader(system));
+    assertTrue(
+        GlobalMessageUtil.GlobalMessageControl.delegatesToSystemClassLoader(
+            new URLClassLoader(new URL[0], system)));
+    assertTrue(
+        GlobalMessageUtil.GlobalMessageControl.delegatesToSystemClassLoader(
+            new URLClassLoader(new URL[0], new URLClassLoader(new URL[0], system))));
+    assertFalse(
+        GlobalMessageUtil.GlobalMessageControl.delegatesToSystemClassLoader(
+            new URLClassLoader(new URL[0], ClassLoader.getPlatformClassLoader())));
+  }
+
+  @Test
+  void bundleIsFoundThroughALoaderThatDelegatesToTheSystemLoader() throws Exception {
+    // No retry for this loader: the bundle comes from its own parent chain
+    ClassLoader child = new URLClassLoader(new URL[0], ClassLoader.getSystemClassLoader());
+    ResourceBundle bundle =
+        new GlobalMessageUtil.GlobalMessageControl(true)
+            .newBundle(
+                GlobalMessages.SYSTEM_BUNDLE_PACKAGE + "." + GlobalMessages.BUNDLE_NAME,
+                Locale.FRANCE,
+                "java.properties",
+                child,
+                false);
+    assertEquals("Une certaine valeur {0}", bundle.getString("someKey"));
   }
 
   @Test
@@ -153,6 +209,47 @@ class GlobalMessageUtilTest {
             new String[] {GlobalMessages.SYSTEM_BUNDLE_PACKAGE},
             "someKey",
             new String[] {"foo"},
+            GlobalMessages.PKG,
+            GlobalMessages.BUNDLE_NAME));
+  }
+
+  @Test
+  void emptyTranslationFallsBackToTheNextLocale() {
+    // messages_fr_FR has "emptyKey=", the way Weblate writes an untranslated key
+    LanguageChoice.getInstance().setDefaultLocale(Locale.FRANCE);
+    assertEquals(
+        "Empty in French foo",
+        GlobalMessageUtil.calculateString(
+            new String[] {GlobalMessages.SYSTEM_BUNDLE_PACKAGE},
+            "emptyKey",
+            new String[] {"foo"},
+            GlobalMessages.PKG,
+            GlobalMessages.BUNDLE_NAME));
+  }
+
+  @Test
+  void emptyTranslationFallsBackToTheNextPackageFirst() {
+    // empty in i18n/messages_fr_FR, translated in foo/messages_fr
+    LanguageChoice.getInstance().setDefaultLocale(Locale.FRANCE);
+    assertEquals(
+        "Traduit dans foo foo",
+        GlobalMessageUtil.calculateString(
+            new String[] {GlobalMessages.SYSTEM_BUNDLE_PACKAGE, "org.apache.hop.foo"},
+            "emptyInFrenchOnly",
+            new String[] {"foo"},
+            GlobalMessages.PKG,
+            GlobalMessages.BUNDLE_NAME));
+  }
+
+  @Test
+  void keyThatIsEmptyEverywhereStaysEmpty() {
+    LanguageChoice.getInstance().setDefaultLocale(Locale.FRANCE);
+    assertEquals(
+        "",
+        GlobalMessageUtil.calculateString(
+            new String[] {GlobalMessages.SYSTEM_BUNDLE_PACKAGE},
+            "alwaysEmpty",
+            new String[] {},
             GlobalMessages.PKG,
             GlobalMessages.BUNDLE_NAME));
   }

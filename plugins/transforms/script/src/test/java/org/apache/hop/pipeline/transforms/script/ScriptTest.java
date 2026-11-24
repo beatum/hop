@@ -30,6 +30,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
 import org.apache.hop.core.IRowSet;
@@ -194,13 +195,10 @@ class ScriptTest {
 
   @Test
   void getValueFromScript_bignumberType_bigDecimal_returnsBigDecimal() throws HopValueException {
+    // Groovy: 2.5 * 2 is a java.math.BigDecimal
     meta.getFields().add(createField("bn", "BigNumber"));
-    // Script.getValueFromScript TYPE_BIGNUMBER handles NativeNumber, NativeJavaObject, boxed
-    // primitives, String;
-    // java.math.BigDecimal falls through to default and throws (could be extended to handle
-    // BigDecimal).
     BigDecimal bd = new BigDecimal("123.45");
-    assertThrows(HopValueException.class, () -> script.getValueFromScript(bd, 0));
+    assertEquals(bd, script.getValueFromScript(bd, 0));
   }
 
   // --- putRow: Integer normalized to Long ---
@@ -211,7 +209,7 @@ class ScriptTest {
     rowMeta.addValueMeta(new ValueMetaInteger("id"));
     rowMeta.addValueMeta(new ValueMetaString("name"));
 
-    Object[] row = new Object[] {Integer.valueOf(99), "test"};
+    Object[] row = {Integer.valueOf(99), "test"};
 
     IRowSet outputSet = mock(IRowSet.class, Mockito.RETURNS_MOCKS);
     when(outputSet.putRow(any(IRowMeta.class), any(Object[].class))).thenReturn(true);
@@ -234,7 +232,7 @@ class ScriptTest {
     IRowMeta rowMeta = new RowMeta();
     rowMeta.addValueMeta(new ValueMetaString("name"));
 
-    Object[] row = new Object[] {"hello"};
+    Object[] row = {"hello"};
 
     IRowSet outputSet = mock(IRowSet.class, Mockito.RETURNS_MOCKS);
     when(outputSet.putRow(any(IRowMeta.class), any(Object[].class))).thenReturn(true);
@@ -308,9 +306,59 @@ class ScriptTest {
   }
 
   @Test
+  void getValueFromScript_bignumberType_double_keepsFraction() throws HopValueException {
+    meta.getFields().add(createField("bn", "BigNumber"));
+    assertEquals(
+        0, new BigDecimal("2.75").compareTo((BigDecimal) script.getValueFromScript(2.75d, 0)));
+  }
+
+  @Test
+  void getValueFromScript_bignumberType_stringWithFraction_keepsFraction()
+      throws HopValueException {
+    meta.getFields().add(createField("bn", "BigNumber"));
+    assertEquals(new BigDecimal("12.345"), script.getValueFromScript("12.345", 0));
+  }
+
+  @Test
+  void getValueFromScript_bignumberType_wholeDouble_plainNotation() throws HopValueException {
+    // GraalJS returns a Double for 2.5 * 2e7; BigDecimal.valueOf would give 5.0E+7
+    meta.getFields().add(createField("bn", "BigNumber"));
+    BigDecimal value = (BigDecimal) script.getValueFromScript(5.0E7d, 0);
+    assertEquals("50000000", value.toString());
+    assertEquals("10000000000", script.getValueFromScript(1e10d, 0).toString());
+  }
+
+  @Test
+  void getValueFromScript_bignumberType_float_keepsShortestDecimal() throws HopValueException {
+    meta.getFields().add(createField("bn", "BigNumber"));
+    assertEquals(new BigDecimal("0.1"), script.getValueFromScript(0.1f, 0));
+  }
+
+  @Test
+  void getValueFromScript_bignumberType_bigInteger_keepsAllDigits() throws HopValueException {
+    // Groovy 10G**30, Jython 10**30, JavaScript 10n**30n
+    meta.getFields().add(createField("bn", "BigNumber"));
+    BigInteger big = BigInteger.TEN.pow(30);
+    assertEquals(new BigDecimal(big), script.getValueFromScript(big, 0));
+  }
+
+  @Test
+  void getValueFromScript_bignumberType_nanOrInfinity_failsNamingTheField() {
+    meta.getFields().add(createField("bn", "BigNumber"));
+    HopValueException nan =
+        assertThrows(HopValueException.class, () -> script.getValueFromScript(Double.NaN, 0));
+    assertTrue(nan.getMessage().contains("[bn]"), nan.getMessage());
+    assertTrue(nan.getMessage().contains("NaN"), nan.getMessage());
+    HopValueException infinity =
+        assertThrows(
+            HopValueException.class, () -> script.getValueFromScript(Double.POSITIVE_INFINITY, 0));
+    assertTrue(infinity.getMessage().contains("Infinity"), infinity.getMessage());
+  }
+
+  @Test
   void getValueFromScript_binaryType_returnsResult() throws HopValueException {
     meta.getFields().add(createField("bin", "Binary"));
-    byte[] bytes = new byte[] {1, 2, 3};
+    byte[] bytes = {1, 2, 3};
     assertEquals(bytes, script.getValueFromScript(bytes, 0));
   }
 
@@ -322,7 +370,7 @@ class ScriptTest {
   }
 
   @Test
-  void init_setsEngineWhenLanguageAvailable() throws Exception {
+  void init_setsEngineWhenLanguageAvailable() {
     ScriptData data = new ScriptData();
     meta.setLanguageName("Groovy");
     Script scriptWithData =
@@ -338,7 +386,7 @@ class ScriptTest {
   }
 
   @Test
-  void init_stillReturnsTrueWhenEngineLookupFails() throws Exception {
+  void init_stillReturnsTrueWhenEngineLookupFails() {
     ScriptData data = new ScriptData();
     meta.setLanguageName("NonExistentLanguageXYZ");
     Script scriptWithData =
@@ -354,7 +402,7 @@ class ScriptTest {
   }
 
   @Test
-  void init_copiesScriptsFromMeta() throws Exception {
+  void init_copiesScriptsFromMeta() {
     ScriptData data = new ScriptData();
     meta.setLanguageName("Groovy");
     meta.getScripts()
@@ -394,7 +442,7 @@ class ScriptTest {
 
     RowMeta inputMeta = new RowMeta();
     inputMeta.addValueMeta(new ValueMetaString("dummy"));
-    Object[] inputRow = new Object[] {"x"};
+    Object[] inputRow = {"x"};
 
     Script runScript =
         new Script(

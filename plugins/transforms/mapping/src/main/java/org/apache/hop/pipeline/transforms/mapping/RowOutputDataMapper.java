@@ -28,11 +28,11 @@ import org.apache.hop.pipeline.transform.RowAdapter;
  */
 public class RowOutputDataMapper extends RowAdapter {
 
-  private MappingIODefinition inputDefinition;
-  private MappingIODefinition outputDefinition;
+  private final MappingIODefinition inputDefinition;
+  private final MappingIODefinition outputDefinition;
   private boolean first = true;
   private IRowMeta renamedRowMeta;
-  private IPutRow iPutRow;
+  private final IPutRow iPutRow;
 
   public RowOutputDataMapper(
       MappingIODefinition inputDefinition, MappingIODefinition outputDefinition, IPutRow iPutRow) {
@@ -48,7 +48,7 @@ public class RowOutputDataMapper extends RowAdapter {
       first = false;
       renamedRowMeta = rowMeta.clone();
 
-      if (inputDefinition.isRenamingOnOutput()) {
+      if (inputDefinition != null && inputDefinition.isRenamingOnOutput()) {
         for (MappingValueRename valueRename : inputDefinition.getValueRenames()) {
           IValueMeta valueMeta = renamedRowMeta.searchValueMeta(valueRename.getTargetValueName());
           if (valueMeta != null) {
@@ -56,10 +56,12 @@ public class RowOutputDataMapper extends RowAdapter {
           }
         }
       }
-      for (MappingValueRename valueRename : outputDefinition.getValueRenames()) {
-        IValueMeta valueMeta = renamedRowMeta.searchValueMeta(valueRename.getSourceValueName());
-        if (valueMeta != null) {
-          valueMeta.setName(valueRename.getTargetValueName());
+      if (outputDefinition != null) {
+        for (MappingValueRename valueRename : outputDefinition.getValueRenames()) {
+          IValueMeta valueMeta = renamedRowMeta.searchValueMeta(valueRename.getSourceValueName());
+          if (valueMeta != null) {
+            valueMeta.setName(valueRename.getTargetValueName());
+          }
         }
       }
     }

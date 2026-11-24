@@ -17,11 +17,10 @@
 
 package org.apache.hop.pipeline.transforms.cubeoutput;
 
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.zip.GZIPOutputStream;
 import org.apache.commons.vfs2.FileObject;
 import org.apache.hop.core.ResultFile;
+import org.apache.hop.core.compress.gzip.GzipCompressionLevel;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.exception.HopFileException;
 import org.apache.hop.core.exception.HopTransformException;
@@ -35,6 +34,7 @@ import org.apache.hop.pipeline.PipelineMeta;
 import org.apache.hop.pipeline.transform.BaseTransform;
 import org.apache.hop.pipeline.transform.TransformMeta;
 import org.apache.hop.pipeline.transforms.cube.CubeFilename;
+import org.apache.hop.pipeline.transforms.cube.CubeStreams;
 
 /**
  * Outputs a stream/series of rows to a file, effectively building a sort of (compressed) microcube.
@@ -228,8 +228,10 @@ public class CubeOutput extends BaseTransform<CubeOutputMeta, CubeOutputData> {
 
       data.fos = HopVfs.getOutputStream(filename, false, variables);
       data.countingOutputStream = new CountingOutputStream(data.fos);
-      data.zip = new GZIPOutputStream(data.countingOutputStream);
-      data.dos = new DataOutputStream(data.zip);
+      data.zip =
+          GzipCompressionLevel.orNotStoredDefault(meta.getCompressionLevel())
+              .newOutputStream(data.countingOutputStream);
+      data.dos = CubeStreams.dataOutput(data.zip);
     } catch (Exception e) {
       throw new HopFileException(e);
     }

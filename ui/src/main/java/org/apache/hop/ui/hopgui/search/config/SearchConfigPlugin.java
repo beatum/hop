@@ -30,7 +30,7 @@ import org.apache.hop.core.variables.IVariables;
 import org.apache.hop.metadata.api.IHasHopMetadataProvider;
 import org.apache.hop.ui.core.dialog.ErrorDialog;
 import org.apache.hop.ui.core.gui.GuiCompositeWidgets;
-import org.apache.hop.ui.core.gui.IGuiPluginCompositeWidgetsListener;
+import org.apache.hop.ui.core.gui.IGuiPluginModelWidgetsListener;
 import org.apache.hop.ui.core.widget.TextVar;
 import org.apache.hop.ui.hopgui.HopGui;
 import org.apache.hop.ui.hopgui.perspective.configuration.tabs.ConfigPluginOptionsTab;
@@ -49,7 +49,7 @@ import picocli.CommandLine;
 @GuiPlugin(
     description = "Search" // Tab label in options dialog
     )
-public class SearchConfigPlugin implements IConfigOptions, IGuiPluginCompositeWidgetsListener {
+public class SearchConfigPlugin implements IConfigOptions, IGuiPluginModelWidgetsListener {
 
   private static final String WIDGET_ID_MIN_CONTENT_QUERY_LENGTH =
       "20000-search-min-content-query-length";
@@ -120,7 +120,7 @@ public class SearchConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
       names = {"-sit", "--search-include-project-text-files"},
       description = "Include project text files (CSV, JSON, …) in Hop GUI content search",
       negatable = true)
-  private Boolean includeProjectTextFiles = true;
+  private Boolean includeProjectTextFiles;
 
   @GuiWidgetElement(
       id = WIDGET_ID_SEARCH_AS_YOU_TYPE,
@@ -132,7 +132,7 @@ public class SearchConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
       names = {"-sat", "--search-as-you-type"},
       description = "Run Hop GUI search while typing (debounced)",
       negatable = true)
-  private Boolean searchAsYouType = true;
+  private Boolean searchAsYouType;
 
   @GuiWidgetElement(
       id = WIDGET_ID_DEBOUNCE_MS,
@@ -224,8 +224,7 @@ public class SearchConfigPlugin implements IConfigOptions, IGuiPluginCompositeWi
   }
 
   @Override
-  public void widgetModified(
-      GuiCompositeWidgets compositeWidgets, Control changedWidget, String widgetId) {
+  public void widgetModified(GuiCompositeWidgets compositeWidgets, String widgetId) {
     persistContents(compositeWidgets);
   }
 

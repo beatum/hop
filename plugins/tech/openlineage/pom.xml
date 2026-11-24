@@ -22,7 +22,7 @@
     <parent>
         <groupId>org.apache.hop</groupId>
         <artifactId>hop-plugins-tech</artifactId>
-        <version>2.20.0-SNAPSHOT</version>
+        <version>2.21.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>hop-tech-openlineage</artifactId>
@@ -132,6 +132,12 @@
         <dependency>
             <groupId>org.apache.httpcomponents.core5</groupId>
             <artifactId>httpcore5-h2</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Shared with other plugins at the same version: in lib/core, not in this plugin's lib/. -->
+        <dependency>
+            <groupId>org.hdrhistogram</groupId>
+            <artifactId>HdrHistogram</artifactId>
             <scope>provided</scope>
         </dependency>
         <dependency>

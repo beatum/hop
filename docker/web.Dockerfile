@@ -52,6 +52,13 @@ ENV HOP_PARENT_PROJECT_CONFIG_FILE_NAME=project-config.json
 ENV HOP_ENVIRONMENT_NAME=environment1
 # comma separated list of paths to environment config files (including filename and file extension).
 ENV HOP_ENVIRONMENT_CONFIG_FILE_NAME_PATHS=
+# Metadata export JSON itself (the document hop-conf --export-metadata writes).
+# Imported into the shared metadata folder before a project is registered.
+# No file and no volume: put the document in this variable. Leave empty to skip.
+ENV HOP_SHARED_METADATA_IMPORT_JSON=
+# Path of that same metadata export when it is already a file in the container.
+# Set only one of HOP_SHARED_METADATA_IMPORT_JSON and HOP_SHARED_METADATA_IMPORT_FILE.
+ENV HOP_SHARED_METADATA_IMPORT_FILE=
 # hop run configuration to use
 
 
@@ -80,40 +87,25 @@ RUN apt-get update \
     && mkdir -p "${HOP_AUDIT_FOLDER}" \
     && chown hop:hop "${HOP_AUDIT_FOLDER}"
 
-# Copy resources
-# lib/core includes Beam SDKs when the Beam marketplace plugin is installed into the client
-# (e.g. tools/install-wave1-plugins.sh). Do not COPY plugins/engines/beam/lib-beam: that path
-# was removed in #7721 / #7722 (SDKs now unpack under lib/core). An unconditional COPY fails
-# docker buildx when the directory is missing (apache/hop#7748).
-COPY ./assemblies/web/target/webapp/ "${CATALINA_HOME}"/webapps/ROOT/
-COPY ./assemblies/client/target/hop/config "${CATALINA_HOME}"/webapps/ROOT/config
-COPY ./assemblies/client/target/hop/lib/core "${CATALINA_HOME}"/webapps/ROOT/WEB-INF/lib
-COPY ./assemblies/client/target/hop/plugins "${CATALINA_HOME}"/plugins
-COPY ./assemblies/client/target/hop/lib/jdbc/ "${CATALINA_HOME}"/jdbc-drivers
+# Hop Web as assemblies/web-war lays it out (the same content as hop-web-<version>.war and
+# hop-web-<version>-plugins.zip): the web app, then plugins/ and jdbc-drivers/ into CATALINA_HOME.
+COPY ./assemblies/web-war/target/webapp/ "${CATALINA_HOME}"/webapps/ROOT/
+COPY ./assemblies/web-war/target/tomcat/ "${CATALINA_HOME}"/
+# Marketplace-optional plugins, when tools/install-wave1-plugins.sh installed them into
+# target/optional (Jenkins does): their plugins, their jars under lib/core (the Beam SDKs, for
+# one) into WEB-INF/lib, their JDBC drivers and their sample projects. The folders exist, empty,
+# after every build.
+COPY ./assemblies/web-war/target/optional/plugins/ "${CATALINA_HOME}"/plugins/
+COPY ./assemblies/web-war/target/optional/lib/core/ "${CATALINA_HOME}"/webapps/ROOT/WEB-INF/lib/
+COPY ./assemblies/web-war/target/optional/lib/jdbc/ "${CATALINA_HOME}"/jdbc-drivers/
+COPY ./assemblies/web-war/target/optional/config/ "${CATALINA_HOME}"/webapps/ROOT/config/
 COPY --chown=hop ./docker/resources/run-web.sh /tmp/
 # Tomcat configuration with response compression (see the comments in the file)
 COPY ./docker/resources/server.xml "${CATALINA_HOME}"/conf/server.xml
 
-# Desktop (RCP) UI fragment must not ship in Hop Web. Client lib/core is shared with the
-# desktop assembly and includes hop-ui-rcp; loading its GuiPlugins (e.g. ContentEditorWidget)
-# fails on RAP with NoClassDefFoundError for SWT types such as VerifyKeyListener.
-RUN rm -f "${CATALINA_HOME}"/webapps/ROOT/WEB-INF/lib/hop-ui-rcp-*.jar
-
-# Fix hop-config.json
-RUN sed -i 's/config\/projects/${HOP_CONFIG_FOLDER}\/projects/g' "${CATALINA_HOME}"/webapps/ROOT/config/hop-config.json
-
 RUN mkdir -p "$CATALINA_HOME"/lib/swt/linux/x86_64
 
-# set the correct classpath for hop, hop-conf and hop-run
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-run.sh
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-conf.sh
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-search.sh
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-encrypt.sh
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-import.sh
-RUN  sed -i 's&lib/core/*&../../lib/*:WEB-INF/lib/*:lib/core/*&g' ${CATALINA_HOME}/webapps/ROOT/hop-search.sh
-
-RUN chmod +x ${CATALINA_HOME}/webapps/ROOT/*.sh
+RUN chmod +x ${CATALINA_HOME}/webapps/ROOT/hop ${CATALINA_HOME}/webapps/ROOT/*.sh
 
 # point to the plugins folder
 ENV HOP_PLUGIN_BASE_FOLDERS=$CATALINA_HOME/plugins

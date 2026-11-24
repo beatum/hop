@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -78,6 +77,7 @@ import org.apache.hop.core.security.HopSecurity;
 import org.apache.hop.core.security.HopSecurityContext;
 import org.apache.hop.core.security.HopSecurityPrivilegeMode;
 import org.apache.hop.core.security.Permission;
+import org.apache.hop.core.svg.SvgCache;
 import org.apache.hop.core.undo.ChangeAction;
 import org.apache.hop.core.util.TranslateUtil;
 import org.apache.hop.core.variables.DescribedVariable;
@@ -87,12 +87,13 @@ import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.core.vfs.HopVfsNamespace;
 import org.apache.hop.core.vfs.HopVfsNamespaces;
 import org.apache.hop.i18n.BaseMessages;
-import org.apache.hop.i18n.LanguageChoice;
+import org.apache.hop.i18n.RegionalSettings;
 import org.apache.hop.metadata.api.IHasHopMetadataProvider;
 import org.apache.hop.metadata.api.IHopMetadataProvider;
 import org.apache.hop.metadata.serializer.multi.MultiMetadataProvider;
 import org.apache.hop.metadata.util.HopMetadataInstance;
 import org.apache.hop.metadata.util.HopMetadataUtil;
+import org.apache.hop.metadata.util.SharedMetadata;
 import org.apache.hop.partition.PartitionSchema;
 import org.apache.hop.server.HopServerMeta;
 import org.apache.hop.ui.core.ConstUi;
@@ -184,6 +185,14 @@ import org.eclipse.swt.widgets.ToolItem;
 @Setter
 public class HopGui
     implements IActionContextHandlersProvider, ISearchableProvider, IHasHopMetadataProvider {
+  private static final String CONST_HOP_GUI_TOOLBAR_PRIVILEGE_FULL =
+      "HopGui.Toolbar.Privilege.Full";
+  private static final String CONST_SIDEBAR_BUTTON = "sidebarButton";
+  private static final String CONST_ORG_ECLIPSE_RAP_RWT_CUSTOM_VARIANT =
+      "org.eclipse.rap.rwt.customVariant";
+  private static final String CONST_DESCRIPTOR = "descriptor";
+  private static final String CONST_HOVERED = "hovered";
+  private static final String CONST_SELECTED = "selected";
 
   /**
    * What a perspective's sidebar button is called in the browser, plus the perspective's plugin id.
@@ -665,8 +674,17 @@ public class HopGui
       if (!HopEnvironment.isInitialized()) {
         HopEnvironment.init();
       }
+
       OsHelper.setAppName();
       Display display = setupDisplay();
+
+      // The common GUI images are loaded a little later: parse their SVGs meanwhile (SvgCache, not
+      // SwtSvgImageUtil: initialising that class before the display exists would create one).
+      // Batik sets up AWT (toolkit, graphics environment, cursors) the first time it measures an
+      // image. On macOS that has to run on this first thread, so do it here and not in the
+      // background thread.
+      initializeBatikAwt();
+      SvgCache.preloadFolderInBackground(GuiResource.class, "ui/images/");
 
       // Note: this needs to be done before the look and feel is set
       OsHelper.initOsHandlers(display);
@@ -676,7 +694,9 @@ public class HopGui
       if (!HopLogStore.isInitialized()) {
         HopLogStore.init();
       }
-      Locale.setDefault(LanguageChoice.getInstance().getDefaultLocale());
+      RegionalSettings.getInstance().applyGui();
+
+      SharedMetadata.install(Variables.getADefaultVariableSpace());
 
       HopGui hopGui = HopGui.getInstance();
       hopGui.getCommandLineArguments().addAll(Arrays.asList(arguments));
@@ -794,6 +814,9 @@ public class HopGui
     if (EnvironmentUtils.getInstance().isWeb()) {
       shell.setMaximized(true);
     }
+
+    // The transform and action icons are loaded on first use: parse them now, in the background
+    GuiResource.getInstance().preloadPluginIconsInBackground();
 
     display.asyncExec(
         () -> {
@@ -1115,7 +1138,7 @@ public class HopGui
         comp.setBackground(normalBg);
 
         // Set custom variant for CSS styling in RAP
-        comp.setData("org.eclipse.rap.rwt.customVariant", "sidebarButton");
+        comp.setData(CONST_ORG_ECLIPSE_RAP_RWT_CUSTOM_VARIANT, CONST_SIDEBAR_BUTTON);
 
         // Use GridLayout to center the image without stretching
         GridLayout layout = new GridLayout(1, false);
@@ -1128,7 +1151,7 @@ public class HopGui
         imageLabel = new Label(comp, SWT.NONE);
         imageLabel.setBackground(normalBg);
         imageLabel.setToolTipText(tooltip);
-        imageLabel.setData("org.eclipse.rap.rwt.customVariant", "sidebarButton");
+        imageLabel.setData(CONST_ORG_ECLIPSE_RAP_RWT_CUSTOM_VARIANT, CONST_SIDEBAR_BUTTON);
         SvgLabelFacade.setData(perspective.getId() + "-sidebar", imageLabel, imagePath, imageSize);
         // The composite is what a click has to land on; the image only draws the icon.
         TestIdFacade.set(comp, PERSPECTIVE_TEST_ID_PREFIX + perspective.getId());
@@ -1296,6 +1319,14 @@ public class HopGui
           updateColors.run();
         }
       }
+    }
+  }
+
+  private static void initializeBatikAwt() {
+    try {
+      Class.forName("org.apache.batik.bridge.CursorManager", true, HopGui.class.getClassLoader());
+    } catch (Throwable e) {
+      // Batik then sets AWT up when it first needs it, as before
     }
   }
 
@@ -1571,7 +1602,7 @@ public class HopGui
    */
   public List<String> getPrivilegeModeList() {
     if (!HopWebPrivilegeFacade.isAvailable()) {
-      return List.of(BaseMessages.getString(PKG, "HopGui.Toolbar.Privilege.Full"));
+      return List.of(BaseMessages.getString(PKG, CONST_HOP_GUI_TOOLBAR_PRIVILEGE_FULL));
     }
     return Arrays.asList(HopWebPrivilegeFacade.getModeComboLabels());
   }
@@ -2206,8 +2237,9 @@ public class HopGui
     boolean available = HopWebPrivilegeFacade.isAvailable();
     combo.setEnabled(available);
     if (!available) {
-      combo.setItems(new String[] {BaseMessages.getString(PKG, "HopGui.Toolbar.Privilege.Full")});
-      combo.setText(BaseMessages.getString(PKG, "HopGui.Toolbar.Privilege.Full"));
+      combo.setItems(
+          new String[] {BaseMessages.getString(PKG, CONST_HOP_GUI_TOOLBAR_PRIVILEGE_FULL)});
+      combo.setText(BaseMessages.getString(PKG, CONST_HOP_GUI_TOOLBAR_PRIVILEGE_FULL));
       return;
     }
     String[] items = HopWebPrivilegeFacade.getModeComboLabels();
@@ -2465,6 +2497,11 @@ public class HopGui
       boolean running,
       boolean paused) {
 
+    // Display.dispose() still runs queued asyncExec updates after the shell is gone.
+    if (shell == null || shell.isDisposed()) {
+      return;
+    }
+
     this.capabilityFileTypeHandler = handler;
 
     mainMenuWidgets.enableMenuItem(
@@ -2508,18 +2545,19 @@ public class HopGui
     mainMenuWidgets.enableMenuItem(
         fileType, handler, ID_MAIN_MENU_RUN_PREVIEW, IHopFileType.CAPABILITY_PREVIEW);
 
+    IHopPerspective perspective = getActivePerspective();
     mainMenuWidgets.enableMenuItem(
         fileType,
         handler,
         ID_MAIN_MENU_EDIT_NAV_PREV,
         IHopFileType.CAPABILITY_FILE_HISTORY,
-        getActivePerspective().hasNavigationPreviousFile());
+        perspective != null && perspective.hasNavigationPreviousFile());
     mainMenuWidgets.enableMenuItem(
         fileType,
         handler,
         ID_MAIN_MENU_EDIT_NAV_NEXT,
         IHopFileType.CAPABILITY_FILE_HISTORY,
-        getActivePerspective().hasNavigationNextFile());
+        perspective != null && perspective.hasNavigationNextFile());
 
     mainToolbarWidgets.enableToolbarItem(
         fileType, handler, ID_MAIN_TOOLBAR_SAVE, IHopFileType.CAPABILITY_SAVE, changed);
@@ -2783,8 +2821,8 @@ public class HopGui
         Composite comp = new Composite(bottomToolbar, SWT.NONE);
         comp.setToolTipText(d.getTooltip());
         comp.setBackground(normalBg);
-        comp.setData("descriptor", d);
-        comp.setData("org.eclipse.rap.rwt.customVariant", "sidebarButton");
+        comp.setData(CONST_DESCRIPTOR, d);
+        comp.setData(CONST_ORG_ECLIPSE_RAP_RWT_CUSTOM_VARIANT, CONST_SIDEBAR_BUTTON);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0;
@@ -2794,7 +2832,7 @@ public class HopGui
         Label imgLabel = new Label(comp, SWT.NONE);
         imgLabel.setBackground(normalBg);
         imgLabel.setToolTipText(d.getTooltip());
-        imgLabel.setData("org.eclipse.rap.rwt.customVariant", "sidebarButton");
+        imgLabel.setData(CONST_ORG_ECLIPSE_RAP_RWT_CUSTOM_VARIANT, CONST_SIDEBAR_BUTTON);
         imgLabel.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, true));
         String svgId = "sidebar-bottom-" + d.getId();
         SvgLabelFacade.setData(svgId, imgLabel, d.getImagePath(), d.getImageSize());
@@ -2808,7 +2846,7 @@ public class HopGui
         Runnable updateVisual =
             () -> {
               boolean sel = d.getSelectedSupplier().getAsBoolean();
-              boolean hov = Boolean.TRUE.equals(comp.getData("hovered"));
+              boolean hov = Boolean.TRUE.equals(comp.getData(CONST_HOVERED));
               Color bg = sel ? selectionBg : hov ? hoverBg : normalBg;
               comp.setBackground(bg);
               imgLabel.setBackground(bg);
@@ -2824,13 +2862,13 @@ public class HopGui
         comp.addListener(
             SWT.MouseEnter,
             e -> {
-              comp.setData("hovered", true);
+              comp.setData(CONST_HOVERED, true);
               updateVisual.run();
             });
         comp.addListener(
             SWT.MouseExit,
             e -> {
-              comp.setData("hovered", false);
+              comp.setData(CONST_HOVERED, false);
               updateVisual.run();
             });
         comp.addListener(
@@ -2842,13 +2880,13 @@ public class HopGui
         imgLabel.addListener(
             SWT.MouseEnter,
             e -> {
-              comp.setData("hovered", true);
+              comp.setData(CONST_HOVERED, true);
               updateVisual.run();
             });
         imgLabel.addListener(
             SWT.MouseExit,
             e -> {
-              comp.setData("hovered", false);
+              comp.setData(CONST_HOVERED, false);
               updateVisual.run();
             });
         imgLabel.addListener(
@@ -2864,10 +2902,10 @@ public class HopGui
         Canvas canvas = new Canvas(bottomToolbar, SWT.NONE);
         canvas.setToolTipText(d.getTooltip());
         canvas.setBackground(normalBg);
-        canvas.setData("descriptor", d);
+        canvas.setData(CONST_DESCRIPTOR, d);
         TestIdFacade.set(canvas, "sidebar-bottom-" + d.getId());
-        canvas.setData("selected", d.getSelectedSupplier().getAsBoolean());
-        canvas.setData("hovered", false);
+        canvas.setData(CONST_SELECTED, d.getSelectedSupplier().getAsBoolean());
+        canvas.setData(CONST_HOVERED, false);
 
         GridData gd = new GridData();
         gd.widthHint = buttonSize;
@@ -2880,8 +2918,8 @@ public class HopGui
               Point size = canvas.getSize();
               gc.setAntialias(SWT.ON);
 
-              boolean sel = Boolean.TRUE.equals(canvas.getData("selected"));
-              boolean hov = Boolean.TRUE.equals(canvas.getData("hovered"));
+              boolean sel = Boolean.TRUE.equals(canvas.getData(CONST_SELECTED));
+              boolean hov = Boolean.TRUE.equals(canvas.getData(CONST_HOVERED));
               gc.setBackground(sel ? selectionBg : hov ? hoverBg : normalBg);
               gc.fillRoundRectangle(4, 4, size.x - 8, size.y - 8, 8, 8);
 
@@ -2897,13 +2935,13 @@ public class HopGui
         canvas.addListener(
             SWT.MouseEnter,
             e -> {
-              canvas.setData("hovered", true);
+              canvas.setData(CONST_HOVERED, true);
               canvas.redraw();
             });
         canvas.addListener(
             SWT.MouseExit,
             e -> {
-              canvas.setData("hovered", false);
+              canvas.setData(CONST_HOVERED, false);
               canvas.redraw();
             });
         canvas.addListener(
@@ -2932,7 +2970,7 @@ public class HopGui
     }
     for (Control child : bottomToolbar.getChildren()) {
       SidebarToolbarItemDescriptor desc =
-          (SidebarToolbarItemDescriptor) child.getData("descriptor");
+          (SidebarToolbarItemDescriptor) child.getData(CONST_DESCRIPTOR);
       if (desc != null) {
         boolean selected = desc.getSelectedSupplier().getAsBoolean();
         if (EnvironmentUtils.getInstance().isWeb()) {
@@ -2941,7 +2979,7 @@ public class HopGui
             updateVisual.run();
           }
         } else {
-          child.setData("selected", selected);
+          child.setData(CONST_SELECTED, selected);
           child.redraw();
         }
       }

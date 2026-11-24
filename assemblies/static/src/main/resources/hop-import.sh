@@ -87,11 +87,10 @@ Linux)
   fi
 
 
-  if "${_HOP_JAVA}" -XshowSettings:properties -version 2>&1 | grep -q "os.arch = aarch64"; then
-    CLASSPATH="lib/core/*:lib/spark-client/*:lib/swt/linux/arm64/*"
-  else
-    CLASSPATH="lib/core/*:lib/spark-client/*:lib/swt/linux/$(uname -m)/*"
-  fi
+  case "$(uname -m)" in
+  aarch64 | arm64) CLASSPATH="lib/core/*:lib/spark-client/*:lib/swt/linux/arm64/*" ;;
+  *) CLASSPATH="lib/core/*:lib/spark-client/*:lib/swt/linux/$(uname -m)/*" ;;
+  esac
   ;;
 Darwin)
   if "${_HOP_JAVA}" -XshowSettings:properties -version 2>&1 | grep -q "os.arch = aarch64"; then
@@ -99,7 +98,7 @@ Darwin)
   else
     CLASSPATH="lib/core/*:lib/spark-client/*:lib/swt/osx/x86_64/*"
   fi
-  HOP_OPTIONS="${HOP_OPTIONS} -XstartOnFirstThread"
+  HOP_OPTIONS="${HOP_OPTIONS} -Djava.awt.headless=true"
   ;;
 esac
 

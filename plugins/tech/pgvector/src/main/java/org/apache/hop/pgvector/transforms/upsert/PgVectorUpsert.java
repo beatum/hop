@@ -16,10 +16,14 @@
  */
 package org.apache.hop.pgvector.transforms.upsert;
 
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.hop.core.Const;
+import org.apache.hop.core.database.Database;
 import org.apache.hop.core.database.IDatabase;
+import org.apache.hop.core.exception.HopDatabaseException;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.i18n.BaseMessages;
@@ -38,6 +42,10 @@ import org.apache.hop.pipeline.transform.TransformMeta;
 
 /** Upserts chunk rows with embeddings into a PostgreSQL pgvector table. */
 public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUpsertData> {
+  private static final String CONST_PG_VECTOR_UPSERT_ERROR_BINDING_ROW =
+      "PgVectorUpsert.Error.BindingRow";
+  private static final String CONST_PG_VECTOR_UPSERT_ERROR_COMMITTING =
+      "PgVectorUpsert.Error.Committing";
 
   private static final Class<?> PKG = PgVectorUpsertMeta.class;
 
@@ -129,7 +137,8 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
       throw e;
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "PgVectorUpsert.Error.BindingRow", String.valueOf(id)), e);
+          BaseMessages.getString(PKG, CONST_PG_VECTOR_UPSERT_ERROR_BINDING_ROW, String.valueOf(id)),
+          e);
     }
 
     if (!data.batchMode) {
@@ -142,7 +151,8 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
       data.batchRows.add(row);
     } catch (Exception e) {
       throw new HopException(
-          BaseMessages.getString(PKG, "PgVectorUpsert.Error.BindingRow", String.valueOf(id)), e);
+          BaseMessages.getString(PKG, CONST_PG_VECTOR_UPSERT_ERROR_BINDING_ROW, String.valueOf(id)),
+          e);
     }
 
     if (data.batchRows.size() >= data.commitSize) {
@@ -153,41 +163,53 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
   /** One statement at a time, so a rejected row can be diverted without losing the rest. */
   private void executeSingleRow(Object[] row, String id) throws HopException {
     try {
-      if (data.useSafePoints) {
-        data.savepoint = data.database.setSavepoint();
-      }
-      data.insertStatement.executeUpdate();
-      if (data.useSafePoints && data.releaseSavepoint) {
-        data.database.releaseSavepoint(data.savepoint);
-      }
-    } catch (Exception e) {
+      executeUpdate(data.insertStatement);
+    } catch (HopException | RuntimeException e) {
+      Throwable failure = statementFailure(e);
       if (!getTransformMeta().isDoingErrorHandling()) {
         rollbackQuietly();
         throw new HopException(
-            BaseMessages.getString(PKG, "PgVectorUpsert.Error.BindingRow", String.valueOf(id)), e);
+            BaseMessages.getString(
+                PKG, CONST_PG_VECTOR_UPSERT_ERROR_BINDING_ROW, String.valueOf(id)),
+            failure);
       }
-      // Without this the transaction stays aborted and every later row fails too.
-      revertToSavepoint();
-      putError(data.inputRowMeta, row, 1, e.getMessage(), null, "PGVECTORUPSERT002");
+      // The savepoint already took the row back: the transaction is usable for the next rows.
+      putError(data.inputRowMeta, row, 1, failure.getMessage(), null, "PGVECTORUPSERT002");
       return;
     }
     putRow(data.inputRowMeta, row);
     commitIfCommitSizeReached();
   }
 
-  /** Always called while handling another failure, so it reports rather than throws. */
-  private void revertToSavepoint() {
-    if (!data.useSafePoints || data.savepoint == null) {
-      return;
+  /**
+   * Runs the statement of one row. Where a failed statement aborts the transaction (PostgreSQL) and
+   * there is an error hop, it runs behind a savepoint, so a failure only undoes this row. Only the
+   * statement is inside the savepoint: the row is passed on and committed afterwards, as on a
+   * connection shared by a transactional pipeline the other transforms wait while it is open.
+   */
+  private void executeUpdate(PreparedStatement statement) throws HopException {
+    if (data.useSafePoints) {
+      data.database.runInSavepoint(
+          () -> {
+            executeNow(statement);
+            return null;
+          });
+    } else {
+      executeNow(statement);
     }
+  }
+
+  private static void executeNow(PreparedStatement statement) throws HopDatabaseException {
     try {
-      data.database.rollback(data.savepoint);
-      if (data.releaseSavepoint) {
-        data.database.releaseSavepoint(data.savepoint);
-      }
-    } catch (Exception e) {
-      logDetailed("Unable to roll back to the savepoint: " + e.getMessage());
+      statement.executeUpdate();
+    } catch (SQLException e) {
+      throw new HopDatabaseException(e.getMessage(), e);
     }
+  }
+
+  /** The driver's own failure, for the error hop, rather than the exception wrapping it. */
+  private static Throwable statementFailure(Exception e) {
+    return e instanceof HopDatabaseException && e.getCause() instanceof SQLException sql ? sql : e;
   }
 
   /**
@@ -202,7 +224,8 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
     try {
       data.database.commit();
     } catch (Exception e) {
-      throw new HopException(BaseMessages.getString(PKG, "PgVectorUpsert.Error.Committing"), e);
+      throw new HopException(
+          BaseMessages.getString(PKG, CONST_PG_VECTOR_UPSERT_ERROR_COMMITTING), e);
     }
   }
 
@@ -214,8 +237,30 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
     }
   }
 
-  private boolean hasColumnMappings() {
-    return meta.getColumnMappings() != null && !meta.getColumnMappings().isEmpty();
+  /**
+   * Creates the table, its HNSW index and the mapped columns once for the whole run, before any
+   * copy, Spark partition or Beam bundle writes a row. Otherwise every one of them runs the DDL,
+   * and they race each other creating the same table. The DDL commits on its own, as on the first
+   * row.
+   */
+  @Override
+  public void prepareOnce() throws HopException {
+    Database database =
+        PgVectorDatabase.connect(this, this, getMetadataProvider(), meta.getConnection());
+    try {
+      database.setCommit(0);
+      VectorDistanceMetric indexMetric =
+          meta.getIndexMetric() != null ? meta.getIndexMetric() : VectorDistanceMetric.COSINE;
+      PgVectorDatabase.ensureSchema(
+          database,
+          meta,
+          resolve(meta.getSchemaName()),
+          resolve(meta.getTableName()),
+          indexMetric,
+          Const.toInt(resolve(meta.getEmbeddingDimensions()), 768));
+    } finally {
+      database.disconnect();
+    }
   }
 
   private boolean shouldDeleteDocument(String documentId) {
@@ -234,21 +279,15 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
               String.valueOf(MAX_DELETED_DOCUMENT_CACHE)));
     }
     try {
-      if (data.useSafePoints) {
-        data.savepoint = data.database.setSavepoint();
-      }
       data.deleteStatement.setString(1, documentId);
-      data.deleteStatement.executeUpdate();
-      if (data.useSafePoints && data.releaseSavepoint) {
-        data.database.releaseSavepoint(data.savepoint);
-      }
+      // A failed delete aborts the transaction just as a failed insert does: behind a savepoint
+      // only the delete is undone, and the rows after it can still be written.
+      executeUpdate(data.deleteStatement);
       data.deletedDocuments.add(documentId);
     } catch (Exception e) {
-      // A failed delete aborts the transaction just as a failed insert does. Without this the
-      // caller diverts this row and every row after it fails on the aborted transaction.
-      revertToSavepoint();
       throw new HopException(
-          BaseMessages.getString(PKG, "PgVectorUpsert.Error.DeletingDocument", documentId), e);
+          BaseMessages.getString(PKG, "PgVectorUpsert.Error.DeletingDocument", documentId),
+          e instanceof HopException hop ? statementFailure(hop) : e);
     }
   }
 
@@ -296,7 +335,6 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
     // PostgreSQL aborts the whole transaction on a failed statement, so a row can only be diverted
     // if the transform can roll back to just before it. Table Output does the same.
     data.useSafePoints = iDatabase.isUseSafePoints() && errorHandling;
-    data.releaseSavepoint = iDatabase.isReleaseSavepoint();
     if (data.commitSize <= 0) {
       // As in Table Output: one transaction for the whole run rather than JDBC autocommit, which
       // would split a document delete from the inserts that replace it.
@@ -310,12 +348,21 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
    * <p>The DDL runs with autocommit on. Inside the data transaction a table or index created here
    * would be undone by the rollback of a single failed row, and an index would hold its locks for
    * the length of the load.
+   *
+   * <p>Not on a connection shared by a transactional pipeline: switching it to autocommit commits
+   * the open transaction, with the rows the other transforms wrote so far, and a later rollback of
+   * the pipeline can no longer undo them. There the DDL runs in the pipeline's transaction (it is
+   * transactional in PostgreSQL), and the commit mode is the pipeline's to keep.
    */
   void prepareSchemaAndCommitMode(String schemaName, String tableName) throws HopException {
+    boolean sharedConnection = !Utils.isEmpty(data.database.getConnectionGroup());
     // The HNSW index and the mapped-column ALTERs are independent options, so they have to run on
-    // an existing table too, not only when this transform creates one.
-    if (meta.isCreateTableIfMissing() || meta.isCreateHnswIndex() || hasColumnMappings()) {
-      data.database.setCommit(0);
+    // an existing table too, not only when this transform creates one. Not when the engine ran
+    // them before the run (see prepareOnce).
+    if (meta.hasSchemaDdl() && !isPreparedOnce()) {
+      if (!sharedConnection) {
+        data.database.setCommit(0);
+      }
       VectorDistanceMetric indexMetric =
           meta.getIndexMetric() != null ? meta.getIndexMetric() : VectorDistanceMetric.COSINE;
       PgVectorDatabase.ensureSchema(
@@ -326,7 +373,9 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
           indexMetric,
           Const.toInt(resolve(meta.getEmbeddingDimensions()), 768));
     }
-    data.database.setCommit(data.commitSize);
+    if (!sharedConnection) {
+      data.database.setCommit(data.commitSize);
+    }
   }
 
   private void openDatabase() throws HopException {
@@ -474,7 +523,8 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
       // The transaction is already aborted by PostgreSQL: discard the batch and roll back rather
       // than committing on top of a failure.
       discardFailedBatch();
-      throw new HopException(BaseMessages.getString(PKG, "PgVectorUpsert.Error.Committing"), e);
+      throw new HopException(
+          BaseMessages.getString(PKG, CONST_PG_VECTOR_UPSERT_ERROR_COMMITTING), e);
     }
 
     for (Object[] row : rows) {
@@ -531,7 +581,7 @@ public class PgVectorUpsert extends BaseTransform<PgVectorUpsertMeta, PgVectorUp
       try {
         commitBatch();
       } catch (HopException e) {
-        logError(BaseMessages.getString(PKG, "PgVectorUpsert.Error.Committing"), e);
+        logError(BaseMessages.getString(PKG, CONST_PG_VECTOR_UPSERT_ERROR_COMMITTING), e);
         setErrors(getErrors() + 1);
       }
     }

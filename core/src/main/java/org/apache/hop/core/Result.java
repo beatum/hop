@@ -21,6 +21,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +30,8 @@ import lombok.Setter;
 import org.apache.hop.core.exception.HopException;
 import org.apache.hop.core.exception.HopFileException;
 import org.apache.hop.core.exception.HopRuntimeException;
+import org.apache.hop.core.exception.HopValueException;
+import org.apache.hop.core.failure.ExecutionFailure;
 import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.row.RowMeta;
 import org.apache.hop.core.xml.XmlHandler;
@@ -95,7 +98,7 @@ public class Result implements Cloneable {
   /** The number of files retrieved. */
   private long nrFilesRetrieved;
 
-  /** The result of the workflow or pipeline, true if successful, false otherwise. */
+  /** True when the workflow or pipeline execution succeeded. */
   private boolean result;
 
   /** The entry number. */
@@ -104,7 +107,10 @@ public class Result implements Cloneable {
   /** The exit status. */
   private int exitStatus;
 
-  /** The rows resulting from the pipeline or workflow execution */
+  /**
+   * Rows produced by the workflow or pipeline. A later action can read them to post-process the
+   * previous execution.
+   */
   private List<RowMetaAndData> rows;
 
   /** The result files. */
@@ -112,6 +118,22 @@ public class Result implements Cloneable {
 
   /** Whether the workflow or pipeline was stopped. */
   private boolean stopped;
+
+  /** How many failures {@link #add(Result)} keeps: an action can run a child for every row. */
+  public static final int MAX_FAILURES = 100;
+
+  /**
+   * The failures of the pipelines and workflows that produced this result, so that an action can
+   * tell why its child failed. Kept in memory only: not in the XML or JSON form of a result.
+   */
+  @JsonIgnore private List<ExecutionFailure> failures = new ArrayList<>();
+
+  /**
+   * The action failure this result passes on to the actions after it: the failure of the action
+   * that produced it, or a failure it received along a failure hop and did not recover from. An
+   * action that then fails points at it. Kept in memory only.
+   */
+  @JsonIgnore private ExecutionFailure actionFailure;
 
   /** The number of lines rejected. */
   private long nrLinesRejected;
@@ -181,6 +203,7 @@ public class Result implements Cloneable {
     try {
       Result result = (Result) super.clone();
       result.setRows(null);
+      result.setFailures(failures == null ? new ArrayList<>() : new ArrayList<>(failures));
       if (resultFiles != null) {
         Map<String, ResultFile> clonedFiles = new ConcurrentHashMap<>();
         Collection<ResultFile> files = resultFiles.values();
@@ -206,14 +229,11 @@ public class Result implements Cloneable {
   public Result clone() {
     try {
       Result result = (Result) super.clone();
+      result.setFailures(failures == null ? new ArrayList<>() : new ArrayList<>(failures));
 
       // Clone result rows and files as well...
       if (rows != null) {
-        List<RowMetaAndData> clonedRows = new ArrayList<>();
-        for (RowMetaAndData row : rows) {
-          clonedRows.add(row.clone());
-        }
-        result.setRows(clonedRows);
+        result.setRows(cloneRows(rows));
       }
 
       if (resultFiles != null) {
@@ -232,6 +252,32 @@ public class Result implements Cloneable {
   }
 
   /**
+   * Deep copy of the result rows. Each distinct row metadata is cloned once, and its clone is
+   * shared by every row that shared the original: cloning row metadata rebuilds its number and date
+   * formats, and the engine clones the result before every workflow action. The metadata is matched
+   * by identity, so rows with their own metadata keep their own clone. Every row still gets a new
+   * copy of its values.
+   */
+  private static List<RowMetaAndData> cloneRows(List<RowMetaAndData> rows) {
+    List<RowMetaAndData> clonedRows = new ArrayList<>(rows.size());
+    Map<IRowMeta, IRowMeta> clonedRowMetas = new IdentityHashMap<>();
+    for (RowMetaAndData row : rows) {
+      IRowMeta rowMeta = row.getRowMeta();
+      if (rowMeta == null) {
+        clonedRows.add(row.clone());
+        continue;
+      }
+      IRowMeta clonedRowMeta = clonedRowMetas.computeIfAbsent(rowMeta, IRowMeta::clone);
+      try {
+        clonedRows.add(new RowMetaAndData(clonedRowMeta, rowMeta.cloneRow(row.getData())));
+      } catch (HopValueException e) {
+        throw new HopRuntimeException("Problem with clone row detected in RowMetaAndData", e);
+      }
+    }
+    return clonedRows;
+  }
+
+  /**
    * Returns a string representation of the Result object
    *
    * @see Object#toString()
@@ -245,18 +291,6 @@ public class Result implements Cloneable {
         + ", exit_status="
         + exitStatus
         + (stopped ? " (Stopped)" : ", result=" + result);
-  }
-
-  /**
-   * Returns the resulting rowset from the workflow or pipeline. For example, Result rows are used
-   * in workflows where entries wish to receive the results of previous executions of workflows or
-   * pipelines. The Result rows can be used to do many kinds of pipeline or workflow
-   * post-processing.
-   *
-   * @return a List of rows associated with the result of execution of a workflow or pipeline
-   */
-  public List<RowMetaAndData> getRows() {
-    return rows;
   }
 
   /**
@@ -324,6 +358,18 @@ public class Result implements Cloneable {
     // Copy rows as well (serial execution case)
     if (res.rows != null && !res.rows.isEmpty()) {
       rows.addAll(res.rows);
+    }
+    if (res.failures != null && !res.failures.isEmpty()) {
+      if (failures == null) {
+        failures = new ArrayList<>();
+      }
+      // The first ones: they are the ones that ended a loop over rows
+      for (ExecutionFailure failure : res.failures) {
+        if (failures.size() >= MAX_FAILURES) {
+          break;
+        }
+        failures.add(failure);
+      }
     }
   }
 
@@ -561,35 +607,22 @@ public class Result implements Cloneable {
     nrErrors += incr;
   }
 
-  public long getBytesReadThisAction() {
-    return bytesReadThisAction;
-  }
-
-  public void setBytesReadThisAction(long bytesReadThisAction) {
-    this.bytesReadThisAction = bytesReadThisAction;
-  }
-
-  public long getBytesWrittenThisAction() {
-    return bytesWrittenThisAction;
-  }
-
-  public void setBytesWrittenThisAction(long bytesWrittenThisAction) {
-    this.bytesWrittenThisAction = bytesWrittenThisAction;
-  }
-
-  @Deprecated(since = "2.16")
   /**
    * Returns whether the pipeline or workflow was successful.
    *
+   * @return true if the execution was successful, false otherwise
    * @deprecated Use {@link #isResult()} instead. This method remains for backward compatibility and
    *     will be removed in a future release.
    */
+  @Deprecated(since = "2.16")
   public boolean getResult() {
-    return result;
+    return isResult();
   }
 
   /**
    * Returns whether the pipeline or workflow execution was successful.
+   *
+   * <p>Written out: Lombok does not generate isResult() while the deprecated getResult() exists.
    *
    * @return true if the execution was successful, false otherwise
    */

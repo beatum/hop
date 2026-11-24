@@ -46,6 +46,7 @@ import org.apache.hop.ui.core.dialog.MessageBox;
 import org.apache.hop.ui.core.dialog.PreviewRowsDialog;
 import org.apache.hop.ui.core.gui.GuiResource;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.ComboVar;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
@@ -75,11 +76,10 @@ public class PropertyInputDialog extends BaseTransformDialog {
   private static final Class<?> PKG = PropertyInputMeta.class;
   public static final String CONST_SYSTEM_COMBO_YES = "System.Combo.Yes";
   public static final String CONST_SYSTEM_COMBO_NO = "System.Combo.No";
-  private static final String[] YES_NO_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO),
-        BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES)
-      };
+  private static final String[] YES_NO_COMBO = {
+    BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO),
+    BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES)
+  };
   public static final String CONST_SYSTEM_DIALOG_ERROR_TITLE = "System.Dialog.Error.Title";
 
   private CTabFolder wTabFolder;
@@ -798,60 +798,59 @@ public class PropertyInputDialog extends BaseTransformDialog {
 
     final int FieldsRows = input.getInputFields().size();
 
-    ColumnInfo[] colinf =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Name.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Attribute.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              PropertyInputMeta.KeyValue.getCodes(),
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Type.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getValueMetaNames(),
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Format.Column"),
-              ColumnInfo.COLUMN_TYPE_FORMAT,
-              3),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Length.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Precision.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Currency.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Decimal.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Group.Column"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.TrimType.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              IValueMeta.TrimType.getDescriptions(),
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Repeat.Column"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              new String[] {
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
-                BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
-              },
-              true),
-        };
+    ColumnInfo[] colinf = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Name.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Attribute.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          PropertyInputMeta.KeyValue.getCodes(),
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Type.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getValueMetaNames(),
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Format.Column"),
+          ColumnInfo.COLUMN_TYPE_FORMAT,
+          3),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Length.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Precision.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Currency.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Decimal.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Group.Column"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.TrimType.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          IValueMeta.TrimType.getDescriptions(),
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "PropertyInputDialog.FieldsTable.Repeat.Column"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          new String[] {
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_YES),
+            BaseMessages.getString(PKG, CONST_SYSTEM_COMBO_NO)
+          },
+          true),
+    };
 
     colinf[0].setUsingVariables(true);
     colinf[0].setToolTip(
@@ -1056,18 +1055,9 @@ public class PropertyInputDialog extends BaseTransformDialog {
 
   private void setFileField() {
     try {
-      String value = wFilenameField.getText();
-      wFilenameField.removeAll();
       IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
       if (r != null) {
-        r.getFieldNames();
-
-        for (int i = 0; i < r.getFieldNames().length; i++) {
-          wFilenameField.add(r.getFieldNames()[i]);
-        }
-      }
-      if (value != null) {
-        wFilenameField.setText(value);
+        ComboItems.setItemsKeepingText(wFilenameField, r.getFieldNames());
       }
 
     } catch (HopException ke) {

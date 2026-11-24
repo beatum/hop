@@ -24,15 +24,13 @@ import java.util.function.Consumer;
 import org.apache.hop.core.Const;
 import org.apache.hop.core.Props;
 import org.apache.hop.core.config.HopConfig;
+import org.apache.hop.core.gui.HopLineShape;
 import org.apache.hop.core.gui.plugin.GuiPlugin;
 import org.apache.hop.core.gui.plugin.tab.GuiTab;
 import org.apache.hop.core.gui.plugin.toolbar.GuiToolbarElement;
-import org.apache.hop.core.util.EnvUtil;
 import org.apache.hop.history.AuditManager;
 import org.apache.hop.history.AuditState;
 import org.apache.hop.i18n.BaseMessages;
-import org.apache.hop.i18n.GlobalMessages;
-import org.apache.hop.i18n.LanguageChoice;
 import org.apache.hop.ui.core.PropsUi;
 import org.apache.hop.ui.core.dialog.BaseDialog;
 import org.apache.hop.ui.core.dialog.ErrorDialog;
@@ -78,6 +76,11 @@ import org.eclipse.swt.widgets.Text;
 @GuiPlugin
 public class ConfigGuiOptionsTab {
   private static final Class<?> PKG = BaseDialog.class;
+  private static final String CONST_THEME = "theme";
+  private static final String CONST_PREFERENCES = "preferences";
+  private static final String CONST_HOP_WEB = "hop-web";
+  private static final String CONST_FOLLOW_SYSTEM = "followSystem";
+  private static final String CONST_DARK_MODE = "darkMode";
   public static final String ENTER_OPTIONS_DIALOG_ENTER_NUMBER_HINT =
       "EnterOptionsDialog.EnterNumber.Hint";
 
@@ -100,6 +103,7 @@ public class ConfigGuiOptionsTab {
 
   private Text wIconSize;
   private Text wLineWidth;
+  private Combo wHopLineShape;
   private Text wMiddlePct;
   private Combo wGlobalZoom;
   private Text wGridSize;
@@ -136,7 +140,6 @@ public class ConfigGuiOptionsTab {
   private Button wMetricsPanelShowDataVolume;
   private Button wMetricsPanelShowDataVolumeIn;
   private Button wMetricsPanelShowDataVolumeOut;
-  private Combo wDefaultLocale;
 
   private Combo wAutoLayoutDirection;
   private Text wAutoLayoutLayerSpacing;
@@ -195,6 +198,7 @@ public class ConfigGuiOptionsTab {
       // Reload text fields and checkboxes
       wIconSize.setText(Integer.toString(props.getIconSize()));
       wLineWidth.setText(Integer.toString(props.getLineWidth()));
+      wHopLineShape.setText(props.getHopLineShape().getDescription());
       wMiddlePct.setText(Integer.toString(props.getMiddlePct()));
       wGridSize.setText(Integer.toString(props.getCanvasGridSize()));
       wShowCanvasGrid.setSelection(props.isShowCanvasGridEnabled());
@@ -275,10 +279,10 @@ public class ConfigGuiOptionsTab {
         try {
           AuditState themeState =
               AuditManager.retrieveState(
-                  HopGui.getInstance().getLog(), "hop-web", "preferences", "theme");
+                  HopGui.getInstance().getLog(), CONST_HOP_WEB, CONST_PREFERENCES, CONST_THEME);
           if (themeState != null) {
-            followSystem = themeState.extractBoolean("followSystem", true);
-            darkMode = themeState.extractBoolean("darkMode", darkMode);
+            followSystem = themeState.extractBoolean(CONST_FOLLOW_SYSTEM, true);
+            darkMode = themeState.extractBoolean(CONST_DARK_MODE, darkMode);
             wDarkMode.setSelection(darkMode);
           }
         } catch (Exception ignored) {
@@ -291,15 +295,6 @@ public class ConfigGuiOptionsTab {
       // Reload global zoom
       String globalZoomFactor = Integer.toString((int) (props.getGlobalZoomFactor() * 100)) + '%';
       wGlobalZoom.setText(globalZoomFactor);
-
-      // Reload default locale
-      int idxDefault =
-          Const.indexOfString(
-              LanguageChoice.getInstance().getDefaultLocale().toString(),
-              GlobalMessages.localeCodes);
-      if (idxDefault >= 0) {
-        wDefaultLocale.select(idxDefault);
-      }
     } finally {
       // Always reset the flag
       isReloading = false;
@@ -359,24 +354,6 @@ public class ConfigGuiOptionsTab {
     lookComp = wLookComp;
     lookScrolledComposite = sLookComp;
     lastControl = expandToolbar;
-
-    // Preferred language - at the top
-    Control[] defaultLocaleControls =
-        createComboField(
-            wLookComp,
-            "EnterOptionsDialog.DefaultLocale.Label",
-            null,
-            GlobalMessages.localeDescr,
-            lastControl,
-            margin);
-    wDefaultLocale = (Combo) defaultLocaleControls[1];
-    int idxDefault =
-        Const.indexOfString(
-            LanguageChoice.getInstance().getDefaultLocale().toString(), GlobalMessages.localeCodes);
-    if (idxDefault >= 0) {
-      wDefaultLocale.select(idxDefault);
-    }
-    lastControl = wDefaultLocale;
 
     // Hide menu bar - at the top
     wHideMenuBar =
@@ -501,6 +478,19 @@ public class ConfigGuiOptionsTab {
           }
         });
     lastAppearanceControl = wLineWidth;
+
+    // Hop line shape: straight or curved
+    Control[] hopLineShapeControls =
+        createComboField(
+            appearanceContent,
+            "EnterOptionsDialog.HopLineShape.Label",
+            "EnterOptionsDialog.HopLineShape.ToolTip",
+            HopLineShape.getDescriptions(),
+            lastAppearanceControl,
+            margin);
+    wHopLineShape = (Combo) hopLineShapeControls[1];
+    wHopLineShape.setText(props.getHopLineShape().getDescription());
+    lastAppearanceControl = wHopLineShape;
 
     // Dialog middle percentage
     Control[] middlePctControls =
@@ -1372,6 +1362,7 @@ public class ConfigGuiOptionsTab {
     props.setGraphFont(graphFontData);
     props.setIconSize(Const.toInt(wIconSize.getText(), props.getIconSize()));
     props.setLineWidth(Const.toInt(wLineWidth.getText(), props.getLineWidth()));
+    props.setHopLineShape(HopLineShape.lookupDescription(wHopLineShape.getText()));
     props.setMiddlePct(Const.toInt(wMiddlePct.getText(), props.getMiddlePct()));
     props.setCanvasGridSize(Const.toInt(wGridSize.getText(), 1));
     int directionIndex = wAutoLayoutDirection.getSelectionIndex();
@@ -1442,15 +1433,6 @@ public class ConfigGuiOptionsTab {
     props.setMetricsPanelShowDataVolumeOut(
         dataVolumeVarEnabled && wMetricsPanelShowDataVolumeOut.getSelection());
 
-    int defaultLocaleIndex = wDefaultLocale.getSelectionIndex();
-    if (defaultLocaleIndex < 0 || defaultLocaleIndex >= GlobalMessages.localeCodes.length) {
-      // Code hardening, when the combo-box ever gets in a strange state,
-      // use the first language as default (should be English)
-      defaultLocaleIndex = 0;
-    }
-    String defaultLocale = GlobalMessages.localeCodes[defaultLocaleIndex];
-    LanguageChoice.getInstance().setDefaultLocale(EnvUtil.createLocale(defaultLocale));
-
     if (EnvironmentUtils.getInstance().isWeb()) {
       // Hop Web: store theme in audit (per-user); followSystem = follow OS/browser dark mode
       boolean followSystem = wWebFollowSystemTheme != null && wWebFollowSystemTheme.getSelection();
@@ -1463,20 +1445,24 @@ public class ConfigGuiOptionsTab {
       try {
         AuditState themeState =
             AuditManager.retrieveState(
-                HopGui.getInstance().getLog(), "hop-web", "preferences", "theme");
+                HopGui.getInstance().getLog(), CONST_HOP_WEB, CONST_PREFERENCES, CONST_THEME);
         if (themeState != null) {
-          previousAuditFollowSystem = themeState.extractBoolean("followSystem", true);
-          previousAuditDarkMode = themeState.extractBoolean("darkMode", previousAuditDarkMode);
+          previousAuditFollowSystem = themeState.extractBoolean(CONST_FOLLOW_SYSTEM, true);
+          previousAuditDarkMode = themeState.extractBoolean(CONST_DARK_MODE, previousAuditDarkMode);
         }
       } catch (Exception ignored) {
         // ignore
       }
 
       java.util.Map<String, Object> themeStateMap = new java.util.HashMap<>();
-      themeStateMap.put("followSystem", Boolean.valueOf(followSystem));
-      themeStateMap.put("darkMode", Boolean.valueOf(darkMode));
+      themeStateMap.put(CONST_FOLLOW_SYSTEM, Boolean.valueOf(followSystem));
+      themeStateMap.put(CONST_DARK_MODE, Boolean.valueOf(darkMode));
       AuditManager.storeState(
-          HopGui.getInstance().getLog(), "hop-web", "preferences", "theme", themeStateMap);
+          HopGui.getInstance().getLog(),
+          CONST_HOP_WEB,
+          CONST_PREFERENCES,
+          CONST_THEME,
+          themeStateMap);
 
       // Don't persist dark mode to HopConfig when in web (restore props value before save)
       props.setDarkMode(previousDarkMode);

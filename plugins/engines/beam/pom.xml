@@ -21,7 +21,7 @@
     <parent>
         <groupId>org.apache.hop</groupId>
         <artifactId>hop-plugins-engines</artifactId>
-        <version>2.20.0-SNAPSHOT</version>
+        <version>2.21.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>hop-engines-beam</artifactId>
@@ -29,6 +29,7 @@
     <name>Hop Plugins Engines Beam</name>
 
     <properties>
+        <!-- Also update beam-spark-version in docs/hop-user-manual/antora.yml -->
         <spark.version>3.5.8</spark.version>
     </properties>
 
@@ -108,10 +109,6 @@
             <artifactId>google-auth-library-oauth2-http</artifactId>
             <exclusions>
                 <exclusion>
-                    <groupId>io.grpc</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>io.opencensus</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
@@ -171,10 +168,6 @@
                 </exclusion>
                 <exclusion>
                     <groupId>commons-codec</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>io.grpc</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
                 <exclusion>
@@ -254,10 +247,6 @@
                 <exclusion>
                     <groupId>commons-codec</groupId>
                     <artifactId>commons-codec</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>io.grpc</groupId>
-                    <artifactId>*</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>io.opencensus</groupId>
@@ -364,6 +353,7 @@
         </dependency>
         <dependency>
             <groupId>org.apache.beam</groupId>
+            <!-- Also update flink-version in docs/hop-user-manual/antora.yml -->
             <artifactId>beam-runners-flink-1.19</artifactId>
             <exclusions>
                 <exclusion>
@@ -415,9 +405,10 @@
                     <groupId>commons-io</groupId>
                     <artifactId>commons-io</artifactId>
                 </exclusion>
+                <!-- gcsio declares grpc-testing (and with it JUnit) as a compile dependency. -->
                 <exclusion>
                     <groupId>io.grpc</groupId>
-                    <artifactId>*</artifactId>
+                    <artifactId>grpc-testing</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>io.opencensus</groupId>
@@ -531,10 +522,6 @@
                 </exclusion>
                 <exclusion>
                     <groupId>commons-codec</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>io.grpc</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
                 <exclusion>
@@ -958,10 +945,6 @@
                     <artifactId>commons-codec</artifactId>
                 </exclusion>
                 <exclusion>
-                    <groupId>io.grpc</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>io.netty</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
@@ -1102,10 +1085,6 @@
                     <artifactId>commons-codec</artifactId>
                 </exclusion>
                 <exclusion>
-                    <groupId>io.grpc</groupId>
-                    <artifactId>*</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>io.opencensus</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
@@ -1181,6 +1160,25 @@
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-mqtt</artifactId>
+        </dependency>
+
+        <!-- Parquet file input and output.
+             beam-sdks-java-io-parquet and the Parquet plugin both resolve to Parquet
+             1.18.1. dependencies.xml also puts tech/parquet on the Beam loader, so
+             that loader sees two identical copies of the Parquet jars. That is
+             harmless while both stay on 1.18.1. Do not assume the plugin ships a
+             newer parquet-avro. -->
+        <dependency>
+            <groupId>org.apache.beam</groupId>
+            <artifactId>beam-sdks-java-io-parquet</artifactId>
+            <exclusions>
+                <!-- Transitive and unused here, and it conflicts with the jackson version this
+                     plugin already manages. -->
+                <exclusion>
+                    <groupId>com.google.j2objc</groupId>
+                    <artifactId>j2objc-annotations</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <!-- #2378: Snowflake COPY through GCS. JDBC version comes from hop-libs-jdbc (4.3.0),
              not Beam's 4.0.2. Snowpipe's ingest SDK is omitted because this transform does not
@@ -1688,6 +1686,18 @@
         </dependency>
         <dependency>
             <groupId>org.apache.hop</groupId>
+            <artifactId>hop-tech-avro</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hop</groupId>
+            <artifactId>hop-tech-parquet</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hop</groupId>
             <artifactId>hop-transform-addsequence</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
@@ -1786,54 +1796,10 @@
             </exclusions>
         </dependency>
 
-        <!-- ParquetIO is only referenced by ParquetIOViabilityTest. Test scope keeps
-             the Parquet jars out of the Beam assembly. -->
-        <dependency>
-            <groupId>org.apache.beam</groupId>
-            <artifactId>beam-sdks-java-io-parquet</artifactId>
-            <scope>test</scope>
-            <exclusions>
-                <!-- Transitive and unused here, and it conflicts with the jackson version this
-                     plugin already manages. -->
-                <exclusion>
-                    <groupId>com.google.j2objc</groupId>
-                    <artifactId>j2objc-annotations</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
     </dependencies>
 
     <build>
         <plugins>
-            <plugin>
-                <artifactId>maven-clean-plugin</artifactId>
-                <configuration>
-                    <filesets>
-                        <fileset>
-                            <directory>${project.basedir}/lib</directory>
-                        </fileset>
-                    </filesets>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>stage-confluent-serializers</id>
-                        <goals>
-                            <goal>copy-dependencies</goal>
-                        </goals>
-                        <phase>generate-resources</phase>
-                        <configuration>
-                            <includeGroupIds>io.confluent</includeGroupIds>
-                            <outputDirectory>${project.basedir}/lib</outputDirectory>
-                            <overWriteReleases>true</overWriteReleases>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
             <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
                 <executions>

@@ -39,6 +39,7 @@ import org.apache.hop.pipeline.transforms.html2text.Html2TextMeta.SafelistType;
 import org.apache.hop.ui.core.PropsUi;
 import org.apache.hop.ui.core.dialog.BaseDialog;
 import org.apache.hop.ui.core.dialog.ErrorDialog;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.TextVar;
 import org.apache.hop.ui.pipeline.transform.BaseTransformDialog;
 import org.eclipse.swt.SWT;
@@ -71,7 +72,6 @@ public class Html2TextDialog extends BaseTransformDialog implements ITransformDi
 
   private Button wCleanOnly;
   private Button wNormalisedText;
-  private Button wParallelism;
 
   public Html2TextDialog(
       Shell parent, IVariables variables, Object in, PipelineMeta pipelineMeta, String sname) {
@@ -249,33 +249,6 @@ public class Html2TextDialog extends BaseTransformDialog implements ITransformDi
           }
         });
 
-    // Parallelism
-    Label wlParallelism = new Label(wContent, RIGHT);
-    wlParallelism.setText(getString(PKG, "Html2TextDialog.Parallelism.Label"));
-    PropsUi.setLook(wlParallelism);
-    FormData fdlParallelism = new FormData();
-    fdlParallelism.left = new FormAttachment(0, 0);
-    fdlParallelism.top = new FormAttachment(wSafelistType, margin);
-    fdlParallelism.right = new FormAttachment(middle, -margin);
-    wlParallelism.setLayoutData(fdlParallelism);
-
-    wParallelism = new Button(wContent, CHECK);
-    wParallelism.setSelection(input.isParallelism());
-    PropsUi.setLook(wParallelism);
-    wParallelism.setToolTipText(getString(PKG, "Html2TextDialog.Parallelism.Tooltip"));
-    FormData fdParallelism = new FormData();
-    fdParallelism.left = new FormAttachment(middle, -margin);
-    fdParallelism.top = new FormAttachment(wlParallelism, 0, SWT.CENTER);
-    fdParallelism.right = new FormAttachment(100, 0);
-    wParallelism.setLayoutData(fdParallelism);
-    wParallelism.addSelectionListener(
-        new SelectionAdapter() {
-          @Override
-          public void widgetSelected(SelectionEvent e) {
-            input.setChanged();
-          }
-        });
-
     wContent.pack();
     Rectangle bounds = wContent.getBounds();
     sc.setContent(wContent);
@@ -295,7 +268,6 @@ public class Html2TextDialog extends BaseTransformDialog implements ITransformDi
   /** Copy information from the meta-data input to the dialog fields. */
   public void getData() {
     wHtmlFieldName.setText(Const.NVL(input.getHtmlField(), ""));
-    wParallelism.setSelection(input.isParallelism());
     wCleanOnly.setSelection(input.isCleanOnly());
     wNormalisedText.setSelection(input.isNormalisedText());
     wSafelistType.setText(input.getSafelistType().getDescription());
@@ -318,7 +290,6 @@ public class Html2TextDialog extends BaseTransformDialog implements ITransformDi
     input.setOutputField(wOutputField.getText());
     input.setCleanOnly(wCleanOnly.getSelection());
     input.setNormalisedText(wNormalisedText.getSelection());
-    input.setParallelism(wParallelism.getSelection());
 
     transformName = wTransformName.getText(); // return value
 
@@ -328,18 +299,9 @@ public class Html2TextDialog extends BaseTransformDialog implements ITransformDi
   private void get() {
     if (!gotPreviousFields) {
       try {
-        String htmlField = null;
-        if (wHtmlFieldName.getText() != null) {
-          htmlField = wHtmlFieldName.getText();
-        }
-        wHtmlFieldName.removeAll();
-
         IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
         if (r != null) {
-          wHtmlFieldName.setItems(r.getFieldNames());
-        }
-        if (htmlField != null) {
-          wHtmlFieldName.setText(htmlField);
+          ComboItems.setItemsKeepingText(wHtmlFieldName, r.getFieldNames());
         }
         gotPreviousFields = true;
       } catch (HopException ke) {

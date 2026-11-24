@@ -92,6 +92,8 @@ import org.eclipse.swt.widgets.TreeItem;
  */
 @GuiPlugin
 public class DatabaseWorkbench extends Composite implements TabClosable {
+  private static final String CONST_DATABASE_PERSPECTIVE_ERROR_TITLE =
+      "DatabasePerspective.Error.Title";
 
   public static final Class<?> PKG = DatabasePerspective.class;
 
@@ -123,7 +125,6 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
   /** {@link TreeMemory} key for schema/catalog expand-collapse across filter and refresh. */
   public static final String TREE_MEMORY_KEY = "DatabaseWorkbench-Tree";
 
-  private static final int FILTER_DEBOUNCE_MS = 250;
   private static final String RIGHT_SASH_KEY = "database-workbench-right-sash";
 
   private final IDatabaseWorkbenchHost host;
@@ -169,6 +170,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
 
     searchText = new Text(treeComposite, SWT.SEARCH | SWT.ICON_CANCEL | SWT.ICON_SEARCH);
     searchText.setMessage(BaseMessages.getString(PKG, "DatabasePerspective.Search.Placeholder"));
+    searchText.setToolTipText(BaseMessages.getString(PKG, "DatabasePerspective.Search.Tooltip"));
     PropsUi.setLook(searchText);
     searchText.setLayoutData(new FormDataBuilder().top().fullWidth().result());
     searchText.addListener(SWT.Modify, e -> scheduleFilterApply());
@@ -322,7 +324,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
     } catch (Exception e) {
       new ErrorDialog(
           host.getShell(),
-          BaseMessages.getString(PKG, "DatabasePerspective.Error.Title"),
+          BaseMessages.getString(PKG, CONST_DATABASE_PERSPECTIVE_ERROR_TITLE),
           BaseMessages.getString(PKG, "DatabasePerspective.Error.LoadConnections"),
           e);
     }
@@ -420,7 +422,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
       if (host != null && host.getShell() != null) {
         new ErrorDialog(
             host.getShell(),
-            BaseMessages.getString(PKG, "DatabasePerspective.Error.Title"),
+            BaseMessages.getString(PKG, CONST_DATABASE_PERSPECTIVE_ERROR_TITLE),
             BaseMessages.getString(PKG, "DatabasePerspective.Error.LoadConnections"),
             e);
       }
@@ -451,7 +453,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
       return;
     }
     display.timerExec(-1, applyFilterRunnable);
-    display.timerExec(FILTER_DEBOUNCE_MS, applyFilterRunnable);
+    display.timerExec(ConstUi.FILTER_DEBOUNCE_MS, applyFilterRunnable);
   }
 
   private void cancelScheduledFilterApply() {
@@ -957,7 +959,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
       } catch (Exception e) {
         new ErrorDialog(
             host.getShell(),
-            BaseMessages.getString(PKG, "DatabasePerspective.Error.Title"),
+            BaseMessages.getString(PKG, CONST_DATABASE_PERSPECTIVE_ERROR_TITLE),
             e.getMessage(),
             e);
       }
@@ -1106,7 +1108,9 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
             operation.attachDatabase(db);
             db.connect();
             IRowMeta fields = db.getTableFields(qualified);
-            ddl = db.getCreateTableStatement(node.getObjectName(), fields, null, false, null, true);
+            // getTableFields hands out a copy of the cached layout, so quoting it is safe.
+            meta.quoteReservedWords(fields);
+            ddl = db.getCreateTableStatement(qualified, fields, null, false, null, true);
           }
           String sql = ddl;
           host.asyncExec(() -> openGeneratedSql(meta, sql));
@@ -1239,7 +1243,7 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
         } catch (Exception e) {
           new ErrorDialog(
               host.getShell(),
-              BaseMessages.getString(PKG, "DatabasePerspective.Error.Title"),
+              BaseMessages.getString(PKG, CONST_DATABASE_PERSPECTIVE_ERROR_TITLE),
               BaseMessages.getString(PKG, "DatabasePerspective.Error.OpenFile", filename),
               e);
         }
@@ -1622,15 +1626,48 @@ public class DatabaseWorkbench extends Composite implements TabClosable {
     BackgroundThreadFacade.start(
         () -> {
           try {
-            work.run(operation);
-            operation.complete();
-          } catch (Exception e) {
-            LogChannel.UI.logError(description, e);
-            operation.fail(Const.NVL(e.getMessage(), e.toString()));
+            try {
+              work.run(operation);
+              operation.complete();
+            } catch (Exception e) {
+              // The SQL editor records a statement failure itself and does not throw. Anything
+              // that still escapes is unexpected.
+              if (operation.getStatus() == DatabaseOperation.Status.RUNNING) {
+                LogChannel.UI.logError(description, e);
+                operation.fail(Const.NVL(e.getMessage(), e.toString()));
+              }
+            }
+            host.asyncExec(this::refreshOperationsQuietly);
+          } catch (RuntimeException e) {
+            if (operation.getStatus() == DatabaseOperation.Status.RUNNING) {
+              operation.fail(Const.NVL(e.getMessage(), e.toString()));
+            }
+            if (!DatabaseSqlEditorTab.isShutdownRace(e)) {
+              LogChannel.UI.logError(description, e);
+            }
           }
-          host.asyncExec(operationsPanel::refresh);
         },
         "hop-database-op");
+  }
+
+  private void refreshOperationsQuietly() {
+    if (operationsPanel.isDisposed()) {
+      return;
+    }
+    operationsPanel.refresh();
+  }
+
+  /** Runs a UI callback without letting a disposed widget or image kill the Hop Web session. */
+  static void runSafely(Runnable runnable) {
+    try {
+      if (runnable != null) {
+        runnable.run();
+      }
+    } catch (RuntimeException e) {
+      if (!DatabaseSqlEditorTab.isShutdownRace(e)) {
+        LogChannel.UI.logError("Database workbench UI update failed", e);
+      }
+    }
   }
 
   public void refreshTab(DatabaseSqlEditorTab tab) {

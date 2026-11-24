@@ -377,25 +377,24 @@ public class MetaInjectDialog extends BaseTransformDialog {
 
     final int fieldRows = metaInjectMeta.getSourceOutputFields().size();
 
-    ColumnInfo[] colinf =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Fieldname"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Type"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              ValueMetaFactory.getAllValueMetaNames()),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Length"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Precision"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false),
-        };
+    ColumnInfo[] colinf = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Fieldname"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Type"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          ValueMetaFactory.getAllValueMetaNames()),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Length"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.ColumnInfo.Precision"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false),
+    };
 
     wSourceFields =
         new TableView(
@@ -599,19 +598,18 @@ public class MetaInjectDialog extends BaseTransformDialog {
     wGetParameters.setLayoutData(fdGetParameters);
     wGetParameters.addListener(SWT.Selection, e -> getParametersFromTemplate());
 
-    ColumnInfo[] parameterColumns =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.Parameters.column.Parameter"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              false),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.Parameters.column.Value"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              false),
-        };
+    ColumnInfo[] parameterColumns = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.Parameters.column.Parameter"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          false),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.Parameters.column.Value"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          false),
+    };
     parameterColumns[1].setUsingVariables(true);
 
     wParameters =
@@ -753,24 +751,23 @@ public class MetaInjectDialog extends BaseTransformDialog {
     wTree.setLayoutData(fdTree);
     PropsUi.setLook(wTree);
 
-    ColumnInfo[] colinf =
-        new ColumnInfo[] {
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.Column.TargetTransform"),
-              ColumnInfo.COLUMN_TYPE_TEXT,
-              false,
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.Column.SourceTransform"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              false,
-              true),
-          new ColumnInfo(
-              BaseMessages.getString(PKG, "MetaInjectDialog.Column.SourceField"),
-              ColumnInfo.COLUMN_TYPE_CCOMBO,
-              false,
-              true),
-        };
+    ColumnInfo[] colinf = {
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.Column.TargetTransform"),
+          ColumnInfo.COLUMN_TYPE_TEXT,
+          false,
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.Column.SourceTransform"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          false,
+          true),
+      new ColumnInfo(
+          BaseMessages.getString(PKG, "MetaInjectDialog.Column.SourceField"),
+          ColumnInfo.COLUMN_TYPE_CCOMBO,
+          false,
+          true),
+    };
 
     wTree.setHeaderVisible(true);
     for (ColumnInfo columnInfo : colinf) {
@@ -823,8 +820,11 @@ public class MetaInjectDialog extends BaseTransformDialog {
           String[] sourceFields = fieldMap.keySet().toArray(new String[0]);
           Arrays.sort(sourceFields);
 
+          // Never null: EnterSelectionDialog hides the "Use constant value" option on null.
           String constant =
-              mapping.getSourceTransformName() == null ? mapping.getSourceField() : "";
+              mapping.getSourceTransformName() == null
+                  ? Const.NVL(mapping.getSourceField(), "")
+                  : "";
           EnterSelectionDialog selectSourceFieldDialog =
               new EnterSelectionDialog(
                   shell,

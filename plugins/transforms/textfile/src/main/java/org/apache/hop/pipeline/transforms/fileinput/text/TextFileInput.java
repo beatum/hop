@@ -32,9 +32,9 @@ import org.apache.hop.core.exception.HopTransformException;
 import org.apache.hop.core.file.TextFileInputField;
 import org.apache.hop.core.playlist.FilePlayListAll;
 import org.apache.hop.core.row.IRowMeta;
-import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.row.RowDataUtil;
 import org.apache.hop.core.row.RowMeta;
+import org.apache.hop.core.row.value.ValueMetaFactory;
 import org.apache.hop.core.util.Utils;
 import org.apache.hop.core.vfs.HopVfs;
 import org.apache.hop.i18n.BaseMessages;
@@ -343,7 +343,7 @@ public class TextFileInput extends BaseFileInputTransform<TextFileInputMeta, Tex
       // their passed-through fields: it takes the row layout of a copy that received some.
       if (passingThru && data.passThruFields == null && shared.passThruOutputRowMeta != null) {
         data.outputRowMeta = shared.passThruOutputRowMeta.clone();
-        data.convertRowMeta = data.outputRowMeta.cloneToType(IValueMeta.TYPE_STRING);
+        data.convertRowMeta = ValueMetaFactory.createParseRowMeta(data.outputRowMeta);
         data.nrPassThruFields = shared.nrPassThruFields;
       }
     }
@@ -622,5 +622,15 @@ public class TextFileInput extends BaseFileInputTransform<TextFileInputMeta, Tex
         logError("Error sending error row", e);
       }
     }
+  }
+
+  /** The reader fills one output field per input field, right after the passed-through ones. */
+  @Override
+  protected List<String> fileFieldNames() {
+    List<String> names = new ArrayList<>();
+    for (TextFileInputField field : meta.getInputFields()) {
+      names.add(field.getName());
+    }
+    return names;
   }
 }

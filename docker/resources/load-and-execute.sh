@@ -29,6 +29,45 @@ exitWithCode() {
   exit "${1}"
 }
 
+# Run a Hop command with its output copied to the log file, then exit with its exit code.
+# The termination signals this script gets (docker stop, a Kubernetes pod eviction, ...) are
+# passed on to the command, so that the JVM can stop the running work before it exits. The Hop
+# scripts exec their JVM, so the signal reaches the JVM itself.
+runAndForwardSignals() {
+  local fifo
+  fifo="$(mktemp -u /tmp/hop-output.XXXXXX)"
+  mkfifo "${fifo}"
+  tee "${HOP_LOG_PATH}" <"${fifo}" &
+  local tee_pid=$!
+
+  # The trap is in place before the command starts and stays until this script exits, so that no
+  # signal is lost. A signal that comes in before the command's pid is known is sent once it is.
+  HOP_COMMAND_PID=""
+  HOP_SIGNALLED=false
+  trap 'HOP_SIGNALLED=true; [ -n "${HOP_COMMAND_PID}" ] && kill -TERM "${HOP_COMMAND_PID}" 2>/dev/null' SIGTERM SIGINT SIGHUP
+  "$@" >"${fifo}" 2>&1 &
+  HOP_COMMAND_PID=$!
+  if [ "${HOP_SIGNALLED}" = "true" ]; then
+    kill -TERM "${HOP_COMMAND_PID}" 2>/dev/null
+  fi
+
+  local code=0
+  wait "${HOP_COMMAND_PID}" || code=$?
+  # A trapped signal interrupts wait while the command is still stopping: wait for it to end.
+  while kill -0 "${HOP_COMMAND_PID}" 2>/dev/null; do
+    code=0
+    wait "${HOP_COMMAND_PID}" || code=$?
+  done
+
+  # The same goes for tee, which may still be writing the end of the output to the log.
+  wait "${tee_pid}" || true
+  while kill -0 "${tee_pid}" 2>/dev/null; do
+    wait "${tee_pid}" || true
+  done
+  rm -f "${fifo}"
+  exitWithCode "${code}"
+}
+
 # Download JDBC drivers on container start, before Hop is launched, so they are picked up by the
 # lib/jdbc scan. Driven by environment variables:
 #   HOP_DRIVERS_DOWNLOAD        comma-separated driver ids, each optionally with a version,
@@ -306,6 +345,32 @@ register_hop_project() {
   "${DEPLOYMENT_PATH}"/hop-conf.sh "${conf_args[@]}"
 }
 
+# Import shared metadata before a project is registered. A project home on a named VFS scheme
+# (git-project:///, my-smb://, ...) needs that metadata to exist first.
+#
+import_shared_metadata() {
+  if [ -n "${HOP_SHARED_METADATA_IMPORT_JSON:-}" ] && [ -n "${HOP_SHARED_METADATA_IMPORT_FILE:-}" ]; then
+    log "Error: set only one of HOP_SHARED_METADATA_IMPORT_JSON and HOP_SHARED_METADATA_IMPORT_FILE"
+    exitWithCode 9
+  fi
+  local code=0
+  if [ -n "${HOP_SHARED_METADATA_IMPORT_JSON:-}" ]; then
+    log "Importing shared metadata from the JSON in HOP_SHARED_METADATA_IMPORT_JSON"
+    "${DEPLOYMENT_PATH}"/hop-conf.sh --shared-metadata-import-json="${HOP_SHARED_METADATA_IMPORT_JSON}" || code=$?
+  elif [ -n "${HOP_SHARED_METADATA_IMPORT_FILE:-}" ]; then
+    log "Importing shared metadata from file ${HOP_SHARED_METADATA_IMPORT_FILE}"
+    "${DEPLOYMENT_PATH}"/hop-conf.sh --shared-metadata-import-file="${HOP_SHARED_METADATA_IMPORT_FILE}" || code=$?
+  else
+    return 0
+  fi
+  if [ "${code}" -ne 0 ]; then
+    log "Error: shared metadata import failed with exit code ${code}"
+    exitWithCode "${code}"
+  fi
+}
+
+import_shared_metadata
+
 # If a project folder is defined we assume that we want to create it in the container
 #
 if [ -n "${HOP_PROJECT_FOLDER}" ]; then
@@ -404,12 +469,9 @@ fi
 if [ -z "${HOP_FILE_PATH}" ] && [ -z "${HOP_COMMAND}" ]; then
   write_server_config
   log "Starting a hop-server on port "${HOP_SERVER_PORT}
-  "${DEPLOYMENT_PATH}"/hop-server.sh \
+  runAndForwardSignals "${DEPLOYMENT_PATH}"/hop-server.sh \
     "${HOP_EXEC_OPTIONS[@]}" \
-    /tmp/hop-server.xml \
-    2>&1 | tee ${HOP_LOG_PATH}
-
-  exitWithCode "${PIPESTATUS[0]}"
+    /tmp/hop-server.xml
 else
 
   if [ -z "${HOP_RUN_CONFIG}" ] && [ -z "${HOP_COMMAND}" ]; then
@@ -436,20 +498,16 @@ else
   if [ -n "${HOP_COMMAND}" ]; then
     log "Executing command: ${DEPLOYMENT_PATH}/hop ${HOP_COMMAND} ${HOP_EXEC_OPTIONS[*]} ${HOP_COMMAND_PARAMETERS}"
 
-    "${DEPLOYMENT_PATH}"/hop \
+    runAndForwardSignals "${DEPLOYMENT_PATH}"/hop \
       ${HOP_COMMAND} \
       "${HOP_EXEC_OPTIONS[@]}" \
-      ${HOP_COMMAND_PARAMETERS} \
-      2>&1 | tee "${HOP_LOG_PATH}"
-    exitWithCode "${PIPESTATUS[0]}"
+      ${HOP_COMMAND_PARAMETERS}
   else
     log "Running a single hop workflow / pipeline (${HOP_FILE_PATH})"
-    "${DEPLOYMENT_PATH}"/hop-run.sh \
+    runAndForwardSignals "${DEPLOYMENT_PATH}"/hop-run.sh \
       --file="${HOP_FILE_PATH}" \
       --runconfig="${HOP_RUN_CONFIG}" \
       --parameters="${HOP_RUN_PARAMETERS}" \
-      "${HOP_EXEC_OPTIONS[@]}" \
-      2>&1 | tee "${HOP_LOG_PATH}"
-    exitWithCode "${PIPESTATUS[0]}"
+      "${HOP_EXEC_OPTIONS[@]}"
   fi
 fi

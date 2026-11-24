@@ -37,6 +37,7 @@ import org.apache.hop.metadata.api.IHasHopMetadataProvider;
 import org.apache.hop.metadata.api.IHopMetadataProvider;
 import org.apache.hop.metadata.serializer.json.JsonMetadataProvider;
 import org.apache.hop.metadata.serializer.multi.MultiMetadataProvider;
+import org.apache.hop.metadata.util.HopMetadataUtil;
 import picocli.CommandLine;
 
 @Getter
@@ -79,14 +80,44 @@ public abstract class HopConfigBase implements Runnable, IHasHopMetadataProvider
 
   private boolean handleConfigMixinsOptions(LogChannel log) throws HopException {
     boolean actionTaken = false;
+    CommandLine.ParseResult parseResult = cmd.getParseResult();
+    Map<String, CommandLine.Model.CommandSpec> mixinSpecs = cmd.getCommandSpec().mixins();
     Map<String, Object> mixins = cmd.getMixins();
-    for (String key : mixins.keySet()) {
-      Object mixin = mixins.get(key);
-      if (mixin instanceof IConfigOptions configOptions) {
+    for (Map.Entry<String, Object> entry : mixins.entrySet()) {
+      // Only hand a plugin its options when at least one of them was given. Plugins that load
+      // their current settings when they are created would otherwise save them again, and report
+      // a change, on every unrelated hop-conf command.
+      //
+      if (entry.getValue() instanceof IConfigOptions configOptions
+          && hasMatchedOption(parseResult, mixinSpecs.get(entry.getKey()))) {
         actionTaken = configOptions.handleOption(log, this, variables) || actionTaken;
       }
     }
     return actionTaken;
+  }
+
+  /**
+   * @param parseResult the parsed command line, null if it isn't known
+   * @param mixinSpec the specification of a config plugin mixed into the command
+   * @return true if any option or positional parameter of the mixin was given on the command line,
+   *     or if that can't be determined
+   */
+  static boolean hasMatchedOption(
+      CommandLine.ParseResult parseResult, CommandLine.Model.CommandSpec mixinSpec) {
+    if (parseResult == null || mixinSpec == null) {
+      return true;
+    }
+    for (CommandLine.Model.OptionSpec option : mixinSpec.options()) {
+      if (parseResult.hasMatchedOption(option)) {
+        return true;
+      }
+    }
+    for (CommandLine.Model.PositionalParamSpec positional : mixinSpec.positionalParameters()) {
+      if (parseResult.hasMatchedPositional(positional)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   protected LogLevel determineLogLevel() {
@@ -105,7 +136,7 @@ public abstract class HopConfigBase implements Runnable, IHasHopMetadataProvider
       }
       providers.add(new JsonMetadataProvider(passwordEncoder, folder, variables));
     }
-    metadataProvider = new MultiMetadataProvider(Encr.getEncoder(), providers, variables);
+    metadataProvider = HopMetadataUtil.createMulti(Encr.getEncoder(), providers, variables);
   }
 
   protected void buildLogChannel() {

@@ -23,7 +23,6 @@ import org.apache.hop.core.CheckResult;
 import org.apache.hop.core.ICheckResult;
 import org.apache.hop.core.annotations.Transform;
 import org.apache.hop.core.database.DatabaseMeta;
-import org.apache.hop.core.injection.InjectionSupported;
 import org.apache.hop.core.row.IRowMeta;
 import org.apache.hop.core.row.IValueMeta;
 import org.apache.hop.core.row.value.ValueMetaBoolean;
@@ -38,9 +37,6 @@ import org.apache.hop.pipeline.PipelineMeta;
 import org.apache.hop.pipeline.transform.BaseTransformMeta;
 import org.apache.hop.pipeline.transform.TransformMeta;
 
-@InjectionSupported(
-    localizationPrefix = "GetTableNames.Injection.",
-    groups = {"FIELDS", "SETTINGS", "OUTPUT"})
 @Transform(
     id = "GetTableNames",
     image = "gettablenames.svg",
@@ -258,7 +254,7 @@ public class GetTableNamesMeta extends BaseTransformMeta<GetTableNames, GetTable
       remarks.add(cr);
     } else {
       errorMessage =
-          BaseMessages.getString(PKG, "GetTableNamesMeta.CheckResult.TableNameFieldNameOK");
+          BaseMessages.getString(PKG, "GetTableNamesMeta.CheckResult.TablenameFieldNameOK");
       cr = new CheckResult(ICheckResult.TYPE_RESULT_OK, errorMessage, transformMeta);
       remarks.add(cr);
     }

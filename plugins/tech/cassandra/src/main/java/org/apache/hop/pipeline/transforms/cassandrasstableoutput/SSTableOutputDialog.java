@@ -438,8 +438,8 @@ public class SSTableOutputDialog extends BaseTransformDialog {
       } catch (HopException ex) {
         new ErrorDialog(
             shell,
-            BaseMessages.getString(PKG, "CassandraOutputData.Message.NoIncomingFields.Title"),
-            BaseMessages.getString(PKG, "CassandraOutputData.Message.NoIncomingFields"),
+            BaseMessages.getString(PKG, CONST_SSTABLE_OUTPUT_DATA_MESSAGE_NO_INCOMING_FIELDS_TITLE),
+            BaseMessages.getString(PKG, CONST_SSTABLE_OUTPUT_DATA_MESSAGE_NO_INCOMING_FIELDS),
             ex);
       }
     }

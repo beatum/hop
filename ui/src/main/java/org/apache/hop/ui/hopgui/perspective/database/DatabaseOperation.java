@@ -52,6 +52,7 @@ public class DatabaseOperation {
   private volatile long endTime;
   private volatile String errorMessage;
   private volatile boolean cancelled;
+  private volatile boolean ranToEnd;
 
   private final AtomicReference<Database> database = new AtomicReference<>();
 
@@ -81,12 +82,27 @@ public class DatabaseOperation {
     return cancelled;
   }
 
+  /**
+   * The work finished everything it set out to do, even if a cancel came in meanwhile. A driver
+   * that cannot interrupt a statement lets it run to the end and commit it, so the operation is
+   * done rather than cancelled.
+   */
+  public void markRanToEnd() {
+    ranToEnd = true;
+  }
+
   public IProgressMonitor newMonitor() {
     return new CancelMonitor();
   }
 
   public void complete() {
-    status = cancelled ? Status.CANCELLED : Status.DONE;
+    // A statement failure marks the operation failed and returns. Completing afterwards must not
+    // turn that into success.
+    if (status != Status.RUNNING) {
+      detachDatabase();
+      return;
+    }
+    status = cancelled && !ranToEnd ? Status.CANCELLED : Status.DONE;
     endTime = System.currentTimeMillis();
     detachDatabase();
   }

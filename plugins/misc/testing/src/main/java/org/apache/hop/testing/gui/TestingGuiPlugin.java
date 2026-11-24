@@ -356,7 +356,7 @@ public class TestingGuiPlugin {
       parentId = HopGuiPipelineTransformContext.CONTEXT_ID,
       type = GuiActionType.Delete,
       name = "i18n::TestingGuiPlugin.ContextAction.ClearInputDataset.Name",
-      tooltip = "i18n::TestingGuiPlugin.ContextAction.ClearInputDataset.Message",
+      tooltip = "i18n::TestingGuiPlugin.ContextAction.ClearInputDataset.Tooltip",
       image = "clear-input-dataset.svg",
       category = "i18n::TestingGuiPlugin.Category",
       categoryOrder = "8")
@@ -1568,7 +1568,7 @@ public class TestingGuiPlugin {
   public static final PipelineUnitTest getCurrentUnitTest(PipelineMeta pipelineMeta) {
     // When rendering a pipeline on a server status page we never have a current unit test
     //
-    if (!"GUI".equalsIgnoreCase(Const.getHopPlatformRuntime())) {
+    if (!Const.isGuiRuntime()) {
       return null;
     }
     // Same rule as getPipelineGraph: never access HopGui/SWT from a worker thread (issue #7896).

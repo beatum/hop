@@ -26,7 +26,7 @@ import org.apache.hop.core.row.value.ValueMetaString;
 
 public class RowMetaBuilder {
 
-  private RowMeta rowMeta;
+  private final RowMeta rowMeta;
 
   public RowMetaBuilder() {
     this.rowMeta = new RowMeta();
@@ -55,12 +55,12 @@ public class RowMetaBuilder {
   }
 
   public RowMetaBuilder addNumber(String name, int length, int precision) {
-    rowMeta.addValueMeta(new ValueMetaNumber(name, length, -1));
+    rowMeta.addValueMeta(new ValueMetaNumber(name, length, precision));
     return this;
   }
 
   public RowMetaBuilder addBigNumber(String name, int length, int precision) {
-    rowMeta.addValueMeta(new ValueMetaBigNumber(name, length, -1));
+    rowMeta.addValueMeta(new ValueMetaBigNumber(name, length, precision));
     return this;
   }
 

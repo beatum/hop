@@ -41,6 +41,7 @@ import org.apache.hop.ui.core.dialog.MessageBox;
 import org.apache.hop.ui.core.dialog.PreviewRowsDialog;
 import org.apache.hop.ui.core.gui.GuiResource;
 import org.apache.hop.ui.core.widget.ColumnInfo;
+import org.apache.hop.ui.core.widget.ComboItems;
 import org.apache.hop.ui.core.widget.NamingSchemeTypes;
 import org.apache.hop.ui.core.widget.TableView;
 import org.apache.hop.ui.core.widget.TextVar;
@@ -66,13 +67,11 @@ import org.eclipse.swt.widgets.TableItem;
 import org.eclipse.swt.widgets.Text;
 
 public class TikaDialog extends BaseTransformDialog {
-  public static final int[] dateLengths = new int[] {23, 19, 14, 10, 10, 10, 10, 8, 8, 8, 8, 6, 6};
+  public static final int[] dateLengths = {23, 19, 14, 10, 10, 10, 10, 8, 8, 8, 8, 6, 6};
   private static final Class<?> PKG = TikaMeta.class;
-  private static final String[] YES_NO_COMBO =
-      new String[] {
-        BaseMessages.getString(PKG, "System.Combo.No"),
-        BaseMessages.getString(PKG, "System.Combo.Yes")
-      };
+  private static final String[] YES_NO_COMBO = {
+    BaseMessages.getString(PKG, "System.Combo.No"), BaseMessages.getString(PKG, "System.Combo.Yes")
+  };
   private final TikaMeta input;
   private CTabFolder wTabFolder;
   private Label wlFilename;
@@ -709,14 +708,9 @@ public class TikaDialog extends BaseTransformDialog {
   private void setDynamicFilenameField() {
     if (!gotPreviousFields) {
       try {
-        String field = wFilenameField.getText();
-        wFilenameField.removeAll();
         IRowMeta r = pipelineMeta.getPrevTransformFields(variables, transformName);
         if (r != null) {
-          wFilenameField.setItems(r.getFieldNames());
-        }
-        if (field != null) {
-          wFilenameField.setText(field);
+          ComboItems.setItemsKeepingText(wFilenameField, r.getFieldNames());
         }
       } catch (HopException ke) {
         new ErrorDialog(

@@ -18,6 +18,7 @@
 package org.apache.hop.lineage.hub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -62,7 +63,7 @@ class LineageHubTest {
   }
 
   @Test
-  void flushDeliversBatchedEvents() throws Exception {
+  void flushDeliversBatchedEvents() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 2, 5000L, Set.of());
     List<Integer> sizes = new ArrayList<>();
     ILineageSink sink = batch -> sizes.add(batch.size());
@@ -76,7 +77,7 @@ class LineageHubTest {
   }
 
   @Test
-  void failingSinkDoesNotPreventOtherSink() throws Exception {
+  void failingSinkDoesNotPreventOtherSink() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 10, 5000L, Set.of());
     List<List<LineageEvent>> good = new ArrayList<>();
     ILineageSink bad =
@@ -151,7 +152,7 @@ class LineageHubTest {
   }
 
   @Test
-  void sinkThatFailsToLoadDoesNotStallFlush() throws Exception {
+  void sinkThatFailsToLoadDoesNotStallFlush() {
     // The OpenLineage sink once died in init() with a NoClassDefFoundError. That is not a
     // HopException, so it killed the dispatcher thread while the hub still said it was running,
     // and every pipeline and workflow completion then waited out the full flush timeout.
@@ -189,7 +190,7 @@ class LineageHubTest {
   }
 
   @Test
-  void shutdownInvokesSinkShutdownAndIsIdempotent() throws Exception {
+  void shutdownInvokesSinkShutdownAndIsIdempotent() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 10, 50L, Set.of());
     AtomicInteger shutdownCount = new AtomicInteger();
     ILineageSink sink =
@@ -226,7 +227,7 @@ class LineageHubTest {
   }
 
   @Test
-  void multipleSinksEachReceiveAllEvents() throws Exception {
+  void multipleSinksEachReceiveAllEvents() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 10, 50L, Set.of());
     AtomicInteger a = new AtomicInteger();
     AtomicInteger b = new AtomicInteger();
@@ -410,7 +411,7 @@ class LineageHubTest {
   }
 
   @Test
-  void failingSinkShutdownDoesNotAffectOtherSinks() throws Exception {
+  void failingSinkShutdownDoesNotAffectOtherSinks() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 10, 50L, Set.of());
     AtomicInteger okShutdownCount = new AtomicInteger();
     ILineageSink bad =
@@ -511,7 +512,7 @@ class LineageHubTest {
   }
 
   @Test
-  void hubResumesAfterShutdown() throws Exception {
+  void hubResumesAfterShutdown() {
     LineageConfiguration cfg = LineageConfiguration.forTesting(true, 100, 10, 50L, Set.of());
     AtomicInteger initCount = new AtomicInteger();
     AtomicInteger delivered = new AtomicInteger();
@@ -537,6 +538,56 @@ class LineageHubTest {
     hub.shutdown();
     assertEquals(2, initCount.get());
     assertEquals(2, delivered.get());
+  }
+
+  /**
+   * A nested run (one per row of a Pipeline Executor, say) does not wait for the sinks while the
+   * queue has room, and waits for them once it is half full, before events get dropped.
+   */
+  @Test
+  void flushIfBackloggedWaitsOnlyOnceTheQueueIsHalfFull() throws Exception {
+    LineageConfiguration cfg = LineageConfiguration.forTesting(true, 10, 1, 5000L, Set.of());
+    CountDownLatch inSink = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicInteger delivered = new AtomicInteger();
+    ILineageSink sink =
+        batch -> {
+          inSink.countDown();
+          try {
+            release.await(10, TimeUnit.SECONDS);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          }
+          delivered.addAndGet(batch.size());
+        };
+    LineageHub hub = LineageHub.newIsolatedForTesting(cfg, List.of(sink));
+    hub.emit(sampleEvent());
+    assertTrue(inSink.await(5, TimeUnit.SECONDS), "the sink never got the first event");
+
+    // The worker is busy in the sink, so these stay queued: 3 of 10.
+    for (int i = 0; i < 3; i++) {
+      hub.emit(sampleEvent());
+    }
+    Thread belowHalf = new Thread(hub::flushIfBacklogged);
+    belowHalf.start();
+    belowHalf.join(2000);
+    assertFalse(belowHalf.isAlive(), "a nested run waited for the sinks with the queue 3/10 full");
+
+    // 5 of 10 queued: now it waits until the sinks have caught up.
+    for (int i = 0; i < 2; i++) {
+      hub.emit(sampleEvent());
+    }
+    Thread halfFull = new Thread(hub::flushIfBacklogged);
+    halfFull.start();
+    halfFull.join(300);
+    assertTrue(halfFull.isAlive(), "a nested run did not wait with the queue half full");
+
+    release.countDown();
+    halfFull.join(5000);
+    assertFalse(halfFull.isAlive());
+    assertEquals(6, delivered.get());
+    assertEquals(0, hub.getDroppedEventCount());
+    hub.shutdown();
   }
 
   private static LineageEvent sampleEvent() {

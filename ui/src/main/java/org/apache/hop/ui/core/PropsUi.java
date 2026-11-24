@@ -22,6 +22,7 @@ import java.util.Map;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hop.core.Const;
 import org.apache.hop.core.Props;
+import org.apache.hop.core.gui.HopLineShape;
 import org.apache.hop.core.gui.IGuiPosition;
 import org.apache.hop.core.gui.IGuiSize;
 import org.apache.hop.core.gui.Point;
@@ -65,11 +66,13 @@ import org.eclipse.swt.widgets.Widget;
  * fonts, positions of windows, etc.
  */
 public class PropsUi extends Props {
+  private static final String CONST_SHELLS = "shells";
   private static final String OS = System.getProperty("os.name").toLowerCase();
 
   private double nativeZoomFactor;
   private static final String STRING_SHOW_COPY_OR_DISTRIBUTE_WARNING =
       "ShowCopyOrDistributeWarning";
+  private static final String STRING_ASK_TO_RENAME_FROM_FILENAME = "AskToRenameFromFilename";
   private static final String SHOW_TOOL_TIPS = "ShowToolTips";
   private static final String SHOW_CANVAS_TOOL_TIP_PREFIX = "ShowCanvasToolTip";
   private static final String RESOLVE_VARIABLES_IN_TOOLTIPS = "ResolveVariablesInToolTips";
@@ -428,7 +431,7 @@ public class PropsUi extends Props {
     AuditManager.storeState(
         LogChannel.UI,
         HopGui.DEFAULT_HOP_GUI_NAMESPACE,
-        "shells",
+        CONST_SHELLS,
         windowProperty.getName(),
         windowProperty.getStateProperties());
   }
@@ -439,7 +442,7 @@ public class PropsUi extends Props {
     }
     AuditState auditState =
         AuditManager.retrieveState(
-            LogChannel.UI, HopGui.DEFAULT_HOP_GUI_NAMESPACE, "shells", windowName);
+            LogChannel.UI, HopGui.DEFAULT_HOP_GUI_NAMESPACE, CONST_SHELLS, windowName);
     if (auditState == null) {
       return null;
     }
@@ -490,7 +493,7 @@ public class PropsUi extends Props {
    */
   public void clearPersistedDialogScreens() {
     try {
-      AuditManager.clearStates(HopGui.DEFAULT_HOP_GUI_NAMESPACE, "shells");
+      AuditManager.clearStates(HopGui.DEFAULT_HOP_GUI_NAMESPACE, CONST_SHELLS);
     } catch (Exception e) {
       LogChannel.UI.logError("Error clearing persisted dialog positions", e);
     }
@@ -1170,6 +1173,18 @@ public class PropsUi extends Props {
     setProperty(STRING_SHOW_COPY_OR_DISTRIBUTE_WARNING, show ? YES : NO);
   }
 
+  /**
+   * True (the default) to offer, after a file is picked in a transform or action dialog, to give
+   * the transform or action the name of that file.
+   */
+  public boolean isAskingToRenameFromFilename() {
+    return YES.equalsIgnoreCase(getProperty(STRING_ASK_TO_RENAME_FROM_FILENAME, YES));
+  }
+
+  public void setAskingToRenameFromFilename(boolean ask) {
+    setProperty(STRING_ASK_TO_RENAME_FROM_FILENAME, ask ? YES : NO);
+  }
+
   public void setDialogSize(Shell shell, String styleProperty) {
     String prop = getProperty(styleProperty);
     if (Utils.isEmpty(prop)) {
@@ -1335,6 +1350,15 @@ public class PropsUi extends Props {
 
   public void setAutoLayoutDirection(String direction) {
     setProperty(AUTO_LAYOUT_DIRECTION, direction);
+  }
+
+  /** How hops are drawn on the pipeline and workflow canvas. Defaults to straight lines. */
+  public HopLineShape getHopLineShape() {
+    return HopLineShape.lookupCode(getProperty(HopLineShape.GUI_PROPERTY_KEY));
+  }
+
+  public void setHopLineShape(HopLineShape shape) {
+    setProperty(HopLineShape.GUI_PROPERTY_KEY, shape.getCode());
   }
 
   /** Auto-layout distance between consecutive layers, along the flow direction. */
@@ -1630,10 +1654,9 @@ public class PropsUi extends Props {
     setProperty(MAX_EXECUTION_LOGGING_TEXT_SIZE, Integer.toString(maxExecutionLoggingTextSize));
   }
 
-  protected static final String[] globalZoomFactorLevels =
-      new String[] {
-        "200%", "175%", "150%", "140%", "130%", "120%", "110%", "100%", "90%", "80%", "70%"
-      };
+  protected static final String[] globalZoomFactorLevels = {
+    "200%", "175%", "150%", "140%", "130%", "120%", "110%", "100%", "90%", "80%", "70%"
+  };
 
   public static String[] getGlobalZoomFactorLevels() {
     return globalZoomFactorLevels;

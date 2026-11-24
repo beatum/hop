@@ -69,23 +69,50 @@ Hover your mouse over the red error triangle to take a quick peek at the error m
 
 image::hop-gui/pipeline/failed-pipeline.png[Failed pipeline,75%,align="left"]
 
+[[execution-results]]
 After each run the execution results are displayed in the panel on the bottom of your window.
-The Execution Results contains two tabs:
+The panel has these tabs:
 
-* Transform Metrics
-* Logging
+* *Logging*: the log of the pipeline.
+* *Metrics*: the metrics of each transform.
+* *Problems*: the results of the checks of the pipeline and of the linter.
+* *Revisions*: the git history of the pipeline file, when Git is enabled.
 
-The Transform Metrics tab displays metrics per transform.
+The same tabs are shown for a workflow, see xref:workflow/run-debug-workflow.adoc[Run and Debug a Workflow].
 
-image::hop-gui/pipeline/transform-metrics-pipeline.png[Transform Metrics pipeline,75%,align="left"]
+=== Logging
+
+The Logging tab displays the log of the pipeline according to the log level chosen on execution.
+
+image::hop-gui/pipeline/logging-pipeline.png[Logging pipeline,75%,align="left"]
+
+=== Metrics
+
+The Metrics tab displays metrics per transform.
+
+image::hop-gui/pipeline/transform-metrics-pipeline.png[Metrics pipeline,75%,align="left"]
 
 Following metrics are displayed:
 
 include::../snippets/pipeline-metrics-table.adoc[]
 
-The logging tab displays the log of the pipeline according to the log level chosen on execution.
+=== Problems
 
-image::hop-gui/pipeline/logging-pipeline.png[Logging pipeline,75%,align="left"]
+When the xref:linting/index.adoc[linter] is installed and switched on, the Problems tab lists its findings for the file as soon as the file has been linted: when you open it, when you save it, and shortly after you stop editing.
+*Verify this pipeline* on the toolbar adds the remarks of Hop's own checks next to them.
+Double-click a remark to open the transform it is about.
+The toolbar of the tab can collapse and expand all remarks, and *Force refresh* clears the database cache and checks the pipeline again.
+
+image::hop-gui/pipeline/problems-pipeline.png[Problems pipeline,75%,align="left"]
+
+=== Revisions
+
+The Revisions tab lists the commits of the pipeline file, with the columns *Message*, *Author*, *Date* and *Commit*.
+It is shown when *Enable the git plugin* is on (see xref:hop-gui/hop-gui-git.adoc#_git_configuration_options[Git Configuration options]) and Hop has found a git repository for the project, see xref:hop-gui/hop-gui-git.adoc[Working with git].
+For a file that isn't saved yet, that is outside the git repository, or that has no commit yet, the tab shows a message instead of the list.
+
+Select a commit and use *Show text diff* or *Show visual diff* on the toolbar of the tab to compare that version with the file as it is saved now; double-clicking a commit also shows the text diff.
+When the pipeline has changes that aren't saved yet, Hop warns that the comparison is made with the last saved version.
 
 == Preview and debug a pipeline
 
@@ -108,6 +135,91 @@ To change the pipeline run configuration, click **Configure**.
 The collected rows are shown in the preview window when execution pauses or finishes.
 
 image::hop-gui/pipeline/preview-pipeline.png[Preview pipeline,75%,align="left"]
+
+== Debug a pipeline
+
+**Debug** starts a local session and parks every transform before the first row.
+A **Debug mode** badge stays in the top left of the canvas.
+Each hop shows `cursor at stored`: how far the next transform has read, and how many rows are kept on that hop.
+A green border means that transform is running.
+A blue border means it is parked.
+Several transforms can run at the same time.
+Click **Debug** again, or **Exit debug**, to leave the session and return to the editor.
+
+image::hop-gui/pipeline/debug-session-started.jpg[A started debugging session,75%,align="left"]
+
+The **Debugger** tab in the execution results has the transforms, the hops, and the rows on the selected hop.
+
+* **Process 1** runs the selected transform copies for one row. **Process N** uses the number in the **N** field. A copy only takes a row when one is waiting. A request for more rows than the hop holds does not take rows that arrive later.
+* **Try** runs the selected copies and then puts the input cursors back. It does not undo the transform's own state or side effects. Sort rows, Group by, Unique rows, Add sequence, Table output, and similar transforms will see the row again if you process it for real afterwards. The button asks before it runs.
+* **Run selected** lets those copies run until they finish. **Run to here** runs upstream until a row reaches the selection.
+* **Continue** and **Pause** run or park the whole pipeline.
+* **Save**, **Open**, and **Delete** keep a session in the debug sessions folder from the configuration perspective. **Open** loads the rows into a new local session. **Import** on the hop toolbar appends a tab-separated file to the selected hop.
+* **Follow output**, when it is on, selects the first output hop of the transform you click.
+* The hop toolbar rewinds a hop to the first stored row, or clears the rows on the selected hops. Clear keeps the producer's finished flag, so a reader whose producer has already finished does not wait forever. Rewind is refused once that reader has finished.
+* **Rows** shows one page of the stored rows. The **#** column is the row's place in the hop, starting at 1. The arrows move a page, and **Rows** sets how many rows a page holds, up to 5,000. New rows are added to the current page instead of rebuilding it. **#** with the target button jumps to that row. **Find** and **Find next** search the stored rows without loading the whole hop.
+
+Keyboard shortcuts, when the pipeline graph has focus:
+
+* Process 1 is F10, or F6 on macOS.
+* Continue is F11, or F9 on macOS.
+* Pause is Shift+F11, or Shift+F9 on macOS.
+* Exit debug is Ctrl+F2, or Command+F2 on macOS.
+
+**Debug** does not stop a pipeline that is already running. Stop that run first. Leaving the session with **Exit debug**, closing the graph, or starting a normal run removes the hop buffers and the spill files. A normal run does not keep the yellow step marker.
+
+=== Run part of the pipeline
+
+**Run selected** or **Continue** leaves the chosen transforms running and the others parked.
+The hop labels keep up with the rows that have been written and read.
+
+image::hop-gui/pipeline/debug-partial-run.jpg[A partially running pipeline in debug mode,75%,align="left"]
+
+=== Step one row
+
+With a transform selected, **Process 1** lets that copy handle a single row and then parks it again.
+The rows on its output hop show what that step produced.
+
+image::hop-gui/pipeline/debug-single-step.jpg[Single stepping a transform,75%,align="left"]
+
+=== Pause when a row matches
+
+The filter button on the hop toolbar opens **Pause when a row enters this hop**.
+The condition uses the fields on that hop, which are the output of the transform that writes it.
+**Pause** chooses what stops when a matching row arrives:
+
+* **This transform** parks the transform that wrote the row.
+* **The whole pipeline** parks every transform.
+* **Downstream transforms** parks the transform that reads the hop, and everything after it.
+
+The matching row is already stored on the hop.
+The next row is what waits.
+A hop with a condition shows `pause` on its label.
+The clear button on the hop toolbar removes the condition.
+
+image::hop-gui/pipeline/debug-pause-condition.jpg[Conditional pause dialog,60%,align="left"]
+
+[[table-toolbar]]
+== Finding and exporting table data
+
+The toolbar above preview windows and other table grids in Hop Gui can find a value or a column, and export the rows.
+
+The *Find* (search) icon opens a menu with two items:
+
+* *Find value*, also `Ctrl+F` (`Cmd+F` on macOS) in the table, searches the cells for text.
+** Tick *Case sensitive* to match upper and lower case exactly, or *Regular expression* to search with a pattern.
+** Only the checked columns are searched. All columns, hidden ones included, are checked when the dialog opens; *All* and *None* change that.
+** *Find first* starts at the top of the table. *Find next* starts at the selected cell, and after a match continues after it.
+** The search goes row by row, from left to right, and doesn't start over at the top: after the last match it shows *No more matches*.
+* *Find column* lists the columns. Pick one and the table scrolls to it. A hidden column is shown again.
+
+The two export icons write the rows of the table to a file:
+
+* *Export this data to a CSV file*: comma-separated, with every value in double quotes, in UTF-8.
+* *Export this data to a new Excel spreadsheet*: an `.xlsx` file with a bold header row.
+
+Both ask which columns to export, with all of them selected, and also write the `#` row number column first.
+In Hop Gui the file is written to the temporary folder and opened with the program that handles the file type. Hop Web asks where to save it.
 
 [[table-views]]
 == Table views

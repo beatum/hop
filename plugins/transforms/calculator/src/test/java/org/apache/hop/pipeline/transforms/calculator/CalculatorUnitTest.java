@@ -17,6 +17,7 @@
 
 package org.apache.hop.pipeline.transforms.calculator;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -29,9 +30,11 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.apache.hop.core.Const;
 import org.apache.hop.core.HopEnvironment;
@@ -93,7 +96,7 @@ class CalculatorUnitTest {
     inputRowMeta.addValueMeta(pathMeta);
 
     String filepath = "missingFile";
-    Object[] rows = new Object[] {filepath};
+    Object[] rows = {filepath};
     IRowSet inputRowSet = smh.getMockInputRowSet(rows);
     inputRowSet.setRowMeta(inputRowMeta);
 
@@ -136,18 +139,20 @@ class CalculatorUnitTest {
     ValueMetaInteger secondsMeta = new ValueMetaInteger("Seconds");
     inputRowMeta.addValueMeta(secondsMeta);
 
-    IRowSet inputRowSet = null;
-    try {
-      inputRowSet =
-          smh.getMockInputRowSet(
-              new Object[][] {
-                {new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-01-01 00:00:00"), 10L},
-                {new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-10-31 23:59:50"), 30L}
-              });
-    } catch (ParseException pe) {
-      pe.printStackTrace();
-      fail();
-    }
+    IRowSet inputRowSet =
+        assertDoesNotThrow(
+            () ->
+                smh.getMockInputRowSet(
+                    new Object[][] {
+                      {
+                        new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-01-01 00:00:00"),
+                        10L
+                      },
+                      {
+                        new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-10-31 23:59:50"),
+                        30L
+                      }
+                    }));
     inputRowSet.setRowMeta(inputRowMeta);
 
     CalculatorMeta meta = new CalculatorMeta();
@@ -177,26 +182,19 @@ class CalculatorUnitTest {
     calculator.init();
 
     // Verify output
-    try {
-      calculator.addRowListener(
-          new RowAdapter() {
-            @Override
-            public void rowWrittenEvent(IRowMeta rowMeta, Object[] row)
-                throws HopTransformException {
-              try {
-                customAssertEquals(
-                    new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-01-01 00:00:10"),
-                    row[2]);
-              } catch (ParseException pe) {
-                throw new HopTransformException(pe);
-              }
+    calculator.addRowListener(
+        new RowAdapter() {
+          @Override
+          public void rowWrittenEvent(IRowMeta rowMeta, Object[] row) throws HopTransformException {
+            try {
+              customAssertEquals(
+                  new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").parse("2014-01-01 00:00:10"), row[2]);
+            } catch (ParseException pe) {
+              throw new HopTransformException(pe);
             }
-          });
-      calculator.processRow();
-    } catch (HopException ke) {
-      ke.printStackTrace();
-      fail();
-    }
+          }
+        });
+    assertDoesNotThrow(() -> calculator.processRow());
   }
 
   @Test
@@ -238,19 +236,14 @@ class CalculatorUnitTest {
     calculator.init();
 
     // Verify output
-    try {
-      calculator.addRowListener(
-          new RowAdapter() {
-            @Override
-            public void rowWrittenEvent(IRowMeta rowMeta, Object[] row) {
-              customAssertEquals("123456", row[2]);
-            }
-          });
-      calculator.processRow();
-    } catch (HopException ke) {
-      ke.printStackTrace();
-      fail();
-    }
+    calculator.addRowListener(
+        new RowAdapter() {
+          @Override
+          public void rowWrittenEvent(IRowMeta rowMeta, Object[] row) {
+            customAssertEquals("123456", row[2]);
+          }
+        });
+    assertDoesNotThrow(() -> calculator.processRow());
   }
 
   @Test
@@ -753,8 +746,7 @@ class CalculatorUnitTest {
       final CalculationType calcFunction,
       final Number value,
       final Long precision,
-      final Long roundingMode)
-      throws HopException {
+      final Long roundingMode) {
     {
       final double resultValue = expectedResult.doubleValue();
       assertRoundGeneral(
@@ -1024,5 +1016,104 @@ class CalculatorUnitTest {
       ke.printStackTrace();
       fail();
     }
+  }
+
+  /**
+   * After a CSV file input with lazy conversion the fields hold the bytes read from the file. The
+   * calculations get the values, as they do without lazy conversion.
+   */
+  @Test
+  void lazilyConvertedOperandsGiveTheResultsOfConvertedOnes() throws HopException {
+    String[][] text = {{"MiXed Case", "3", "4"}, {"", "", "5"}};
+
+    List<List<Object>> converted = calculate(text, false);
+    List<List<Object>> lazy = calculate(text, true);
+
+    assertEquals("mixed case", converted.get(0).get(0));
+    assertEquals(7L, converted.get(0).get(1));
+    assertEquals(converted, lazy);
+  }
+
+  /** Lower case of the text field and the sum of the two numbers, for every row. */
+  private List<List<Object>> calculate(String[][] text, boolean lazy) throws HopException {
+    RowMeta inputRowMeta = new RowMeta();
+    inputRowMeta.addValueMeta(new ValueMetaString("text"));
+    inputRowMeta.addValueMeta(new ValueMetaInteger("a"));
+    inputRowMeta.addValueMeta(new ValueMetaInteger("b"));
+    for (IValueMeta valueMeta : inputRowMeta.getValueMetaList()) {
+      // As CSV file input reads a field with lazy conversion
+      valueMeta.setStorageType(IValueMeta.STORAGE_TYPE_BINARY_STRING);
+      valueMeta.setStorageMetadata(ValueMetaFactory.createParseMeta(valueMeta));
+    }
+    Object[][] rows = new Object[text.length][];
+    for (int r = 0; r < text.length; r++) {
+      rows[r] = new Object[text[r].length];
+      for (int f = 0; f < text[r].length; f++) {
+        byte[] bytes = text[r][f].getBytes(StandardCharsets.UTF_8);
+        rows[r][f] = lazy ? bytes : inputRowMeta.getValueMeta(f).convertToNormalStorageType(bytes);
+      }
+    }
+    if (!lazy) {
+      for (IValueMeta valueMeta : inputRowMeta.getValueMetaList()) {
+        valueMeta.setStorageType(IValueMeta.STORAGE_TYPE_NORMAL);
+      }
+    }
+    IRowSet inputRowSet = smh.getMockInputRowSet(rows);
+    inputRowSet.setRowMeta(inputRowMeta);
+
+    CalculatorMeta meta = new CalculatorMeta();
+    meta.getFunctions()
+        .add(
+            new CalculatorMetaFunction(
+                "lower",
+                CalculationType.LOWER_CASE,
+                "text",
+                null,
+                null,
+                "String",
+                0,
+                0,
+                "",
+                "",
+                "",
+                "",
+                false));
+    meta.getFunctions()
+        .add(
+            new CalculatorMetaFunction(
+                "sum",
+                CalculationType.ADD,
+                "a",
+                "b",
+                null,
+                "Integer",
+                0,
+                0,
+                "",
+                "",
+                "",
+                "",
+                false));
+
+    Calculator calculator =
+        new Calculator(
+            smh.transformMeta, meta, new CalculatorData(), 0, smh.pipelineMeta, smh.pipeline);
+    calculator.addRowSetToInputRowSets(inputRowSet);
+    calculator.setInputRowMeta(inputRowMeta);
+    calculator.init();
+
+    List<List<Object>> results = new ArrayList<>();
+    calculator.addRowListener(
+        new RowAdapter() {
+          @Override
+          public void rowWrittenEvent(IRowMeta rowMeta, Object[] row) {
+            results.add(Arrays.asList(row[3], row[4]));
+          }
+        });
+    while (calculator.processRow()) {
+      // one row per call
+    }
+    assertEquals(text.length, results.size());
+    return results;
   }
 }

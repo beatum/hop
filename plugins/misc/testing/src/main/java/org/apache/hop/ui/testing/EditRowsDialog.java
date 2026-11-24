@@ -64,9 +64,9 @@ public class EditRowsDialog {
 
   private Shell shell;
 
-  private List<Object[]> rowBuffer;
+  private final List<Object[]> rowBuffer;
 
-  private PropsUi props;
+  private final PropsUi props;
 
   private String title;
   private String message;
@@ -78,15 +78,15 @@ public class EditRowsDialog {
   private int hmax;
   private int vmax;
 
-  private IRowMeta rowMeta;
+  private final IRowMeta rowMeta;
 
-  private ILogChannel log;
+  private final ILogChannel log;
 
   protected int lineNr;
 
   private int style = SWT.DIALOG_TRIM | SWT.RESIZE | SWT.MAX | SWT.MIN;
 
-  private Shell parentShell;
+  private final Shell parentShell;
 
   private List<Object[]> outputList;
 
@@ -323,8 +323,7 @@ public class EditRowsDialog {
     try {
       stringRowMeta = new RowMeta();
       for (IValueMeta valueMeta : rowMeta.getValueMetaList()) {
-        IValueMeta stringValueMeta =
-            ValueMetaFactory.cloneValueMeta(valueMeta, IValueMeta.TYPE_STRING);
+        IValueMeta stringValueMeta = ValueMetaFactory.createParseMeta(valueMeta);
         stringRowMeta.addValueMeta(stringValueMeta);
       }
 

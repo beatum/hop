@@ -79,6 +79,7 @@ import org.eclipse.jgit.errors.IncorrectObjectTypeException;
 import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.errors.NoWorkTreeException;
 import org.eclipse.jgit.errors.RevisionSyntaxException;
+import org.eclipse.jgit.lib.BranchConfig;
 import org.eclipse.jgit.lib.Config;
 import org.eclipse.jgit.lib.ConfigConstants;
 import org.eclipse.jgit.lib.Constants;
@@ -426,6 +427,15 @@ public class UIGit extends VCS {
     return commit(authorName, message, amend);
   }
 
+  /** Whether the given path has staged, unstaged, or untracked local changes. */
+  public boolean hasLocalChanges(String path) throws HopException {
+    try {
+      return !git.status().addPath(normalizePathForJGit(path)).call().isClean();
+    } catch (Exception e) {
+      throw new HopException("Error checking status for '" + path + "'", e);
+    }
+  }
+
   /**
    * Make a single path look the way it does in a commit, in the working tree and in the index. A
    * path the commit does not have is removed here as well: not having it is what that commit did to
@@ -438,6 +448,12 @@ public class UIGit extends VCS {
   public void restorePathFromCommit(String path, String commitId) throws HopException {
     String normalizedPath = normalizePathForJGit(path);
     try {
+      if (hasLocalChanges(path)) {
+        throw new HopException(
+            "Cannot restore '"
+                + path
+                + "' because it has uncommitted changes. Commit or stash the file before continuing.");
+      }
       if (existsInCommit(normalizedPath, commitId)) {
         git.checkout().setStartPoint(commitId).addPath(normalizedPath).call();
       } else {
@@ -446,6 +462,8 @@ public class UIGit extends VCS {
         //
         git.rm().addFilepattern(normalizedPath).call();
       }
+    } catch (HopException e) {
+      throw e;
     } catch (Exception e) {
       throw new HopException("Error restoring '" + path + "' from commit '" + commitId + "'", e);
     }
@@ -810,12 +828,44 @@ public class UIGit extends VCS {
   }
 
   public boolean fetch() throws HopException {
+    return fetch(true);
+  }
+
+  /**
+   * Fetch from the remote.
+   *
+   * @param promptForCredentials whether an authentication failure may open a credentials dialog.
+   *     Pass false when not running on the UI thread, for example from the automatic fetch timer.
+   */
+  public boolean fetch(boolean promptForCredentials) throws HopException {
     if (!hasRemote()) {
       throw new HopException("There is no remote set up to fetch from. Please set this up first.");
     }
 
     try {
       git.fetch().setCredentialsProvider(credentialsProvider).setCheckFetchedObjects(true).call();
+    } catch (TransportException e) {
+      if (e.getMessage()
+              .contains(
+                  CONST_AUTHENTICATION_IS_REQUIRED_BUT_NO_CREDENTIALS_PROVIDER_HAS_BEEN_REGISTERED)
+          || e.getMessage()
+              .contains(CONST_NOT_AUTHORIZED)) { // when the cached credential does not work
+        if (!promptForCredentials) {
+          throw new HopException("There was an error doing a git fetch", e);
+        }
+        if (e.getMessage().contains(CONST_NOT_AUTHORIZED)) {
+          new ErrorDialog(
+              HopGui.getInstance().getShell(),
+              "Git Error",
+              "Error Authenticating to Git service",
+              e);
+        }
+        if (promptUsernamePassword()) {
+          return fetch(true);
+        }
+      } else {
+        throw new HopException("There was an error doing a git fetch", e);
+      }
     } catch (Exception e) {
       throw new HopException("There was an error doing a git fetch", e);
     }
@@ -827,15 +877,29 @@ public class UIGit extends VCS {
       throw new HopException(
           "You have uncommitted changes. Please commit work before pulling changes.");
     }
-    if (!hasRemote()) {
-      throw new HopException("There is no remote set up to pull from. Please set this up first.");
-    }
 
     try {
+      Repository repository = git.getRepository();
+      String branch = getPullBranchName(repository);
+      BranchConfig branchConfig = new BranchConfig(repository.getConfig(), branch);
+      String remote = branchConfig.getRemote();
+      if (remote == null) {
+        remote = Constants.DEFAULT_REMOTE_NAME;
+      }
+
       // Pull = Fetch + Merge
-      git.fetch().setCredentialsProvider(credentialsProvider).call();
+      if (!BranchConfig.LOCAL_REPOSITORY.equals(remote)) {
+        if (!repository
+            .getConfig()
+            .getSubsections(ConfigConstants.CONFIG_REMOTE_SECTION)
+            .contains(remote)) {
+          throw new HopException(
+              "There is no remote set up to pull from. Please set this up first.");
+        }
+        git.fetch().setRemote(remote).setCredentialsProvider(credentialsProvider).call();
+      }
       return mergeBranch(
-          Constants.DEFAULT_REMOTE_NAME + "/" + getBranch(), MergeStrategy.RECURSIVE);
+          getPullBranch(repository, branch, branchConfig, remote), MergeStrategy.RECURSIVE);
     } catch (TransportException e) {
       if (e.getMessage()
               .contains(
@@ -855,10 +919,51 @@ public class UIGit extends VCS {
       } else {
         throw new HopException("There was an error doing a git pull", e);
       }
+    } catch (HopException e) {
+      throw e;
     } catch (Exception e) {
       throw new HopException("There was an error doing a git pull", e);
     }
     return false;
+  }
+
+  private String getPullBranchName(Repository repository) throws HopException, IOException {
+    String fullBranch = repository.getFullBranch();
+    if (fullBranch == null || !fullBranch.startsWith(Constants.R_HEADS)) {
+      throw new HopException("Cannot pull because HEAD is not on a branch.");
+    }
+    return Repository.shortenRefName(fullBranch);
+  }
+
+  private String getPullBranch(
+      Repository repository, String branch, BranchConfig branchConfig, String remote)
+      throws HopException, IOException {
+    String mergeBranch = branchConfig.getMerge();
+    String pullBranch;
+    if (mergeBranch == null) {
+      pullBranch = Constants.DEFAULT_REMOTE_NAME + "/" + branch;
+    } else if (BranchConfig.LOCAL_REPOSITORY.equals(remote)) {
+      pullBranch = Repository.shortenRefName(mergeBranch);
+    } else {
+      String trackingBranch = branchConfig.getTrackingBranch();
+      pullBranch =
+          trackingBranch == null
+              ? remote + "/" + Repository.shortenRefName(mergeBranch)
+              : Repository.shortenRefName(trackingBranch);
+    }
+
+    if (repository.resolve(pullBranch) == null) {
+      if (mergeBranch == null) {
+        throw new HopException(
+            "There is no upstream branch configured for '"
+                + branch
+                + "' and '"
+                + pullBranch
+                + "' does not exist.");
+      }
+      throw new HopException("The configured upstream branch '" + pullBranch + "' does not exist.");
+    }
+    return pullBranch;
   }
 
   public boolean push() throws HopException {
@@ -1170,6 +1275,14 @@ public class UIGit extends VCS {
     }
   }
 
+  /**
+   * Open a file as it is in a commit, or in the working tree.
+   *
+   * @param file the path of the file
+   * @param commitId the commit to read the file from, or WORKINGTREE
+   * @return the content of the file, or null when the commit doesn't have the file
+   * @throws HopException when the file can't be read
+   */
   public InputStream open(String file, String commitId) throws HopException {
     String normalizedFile = normalizePathForJGit(file);
     if (commitId.equals(WORKINGTREE)) {
@@ -1187,7 +1300,9 @@ public class UIGit extends VCS {
       tw.addTree(tree);
       tw.setFilter(PathFilter.create(normalizedFile));
       tw.setRecursive(true);
-      tw.next();
+      if (!tw.next()) {
+        return null;
+      }
       ObjectLoader loader = git.getRepository().open(tw.getObjectId(0));
       return loader.openStream();
     } catch (MissingObjectException e) {
@@ -1328,7 +1443,7 @@ public class UIGit extends VCS {
       return;
     }
     try {
-      Set<String> untracked = git.status().call().getUntracked();
+      Set<String> untracked = getUntrackedNotIgnored(git.status().call());
       File workTree = new File(directory);
       for (String path : paths) {
         String normalizedPath = normalizePathForJGit(path);
@@ -1400,7 +1515,7 @@ public class UIGit extends VCS {
       if (normalizedPath != null && !".".equals(normalizedPath)) {
         statusCommand = statusCommand.addPath(normalizedPath);
       }
-      List<String> files = new ArrayList<>(statusCommand.call().getUntracked());
+      List<String> files = new ArrayList<>(getUntrackedNotIgnored(statusCommand.call()));
       Collections.sort(files);
       return files;
     } catch (Exception e) {
@@ -1906,6 +2021,16 @@ public class UIGit extends VCS {
       LogChannel.UI.logError("Error checking whether git ignores '" + normalizedPath + "'", e);
     }
     return false;
+  }
+
+  /**
+   * The untracked files of a status that git itself doesn't ignore: what a git clean removes. JGit
+   * also reports the files that only a case insensitive ignore rule matches as untracked.
+   */
+  private Set<String> getUntrackedNotIgnored(Status status) {
+    Set<String> untracked = new HashSet<>(status.getUntracked());
+    untracked.removeAll(getCaseInsensitiveIgnored(untracked));
+    return untracked;
   }
 
   /**

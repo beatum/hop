@@ -76,9 +76,9 @@ public class DatabaseTableInfoTab implements IHopFileTypeHandler {
   @Getter private final Composite control;
   @Getter private CTabItem tabItem;
 
-  private TableView columnsView;
-  private TableView indexesView;
-  private IContentEditorWidget ddlEditor;
+  private final TableView columnsView;
+  private final TableView indexesView;
+  private final IContentEditorWidget ddlEditor;
 
   public DatabaseTableInfoTab(
       Composite parent,
@@ -164,9 +164,13 @@ public class DatabaseTableInfoTab implements IHopFileTypeHandler {
 
   public void setTabItem(CTabItem tabItem) {
     this.tabItem = tabItem;
-    if (tabItem != null && !tabItem.isDisposed()) {
-      tabItem.setText(getName());
-      tabItem.setImage(tabImage());
+    if (tabItem == null || tabItem.isDisposed() || GuiResource.getInstance().isDisposed()) {
+      return;
+    }
+    tabItem.setText(getName());
+    Image image = tabImage();
+    if (image != null && !image.isDisposed()) {
+      tabItem.setImage(image);
     }
   }
 

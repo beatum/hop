@@ -18,7 +18,6 @@
 package org.apache.hop.lineage.openlineage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doNothing;
@@ -38,6 +37,7 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import org.apache.hop.core.logging.HopLogStore;
 import org.apache.hop.core.logging.LogChannel;
+import org.apache.hop.lineage.openlineage.OpenLineageEmitter.Result;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -72,24 +72,27 @@ class OpenLineageHttpClientTest {
   }
 
   @Test
-  void badRequestIsNotRetried() {
+  void badRequestIsRejectedWithoutRetrying() {
     OpenLineageClient delegate = mock(OpenLineageClient.class);
     OpenLineageHttpClient client =
         clientThatFailsWith(delegate, new HttpTransportResponseException(400, "malformed event"));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.REJECTED, client.emit(event()));
     assertEquals(1, client.getFailureCount());
     verify(delegate, times(1)).emit(any(RunEvent.class));
   }
 
+  // A wrong token is a configuration problem someone will fix: the event is kept for later, not
+  // thrown away with everything sent until then, and not retried straight away either.
   @Test
-  void unauthorizedIsNotRetried() {
+  void unauthorizedIsKeptForLaterWithoutRetryingNow() {
     OpenLineageClient delegate = mock(OpenLineageClient.class);
     OpenLineageHttpClient client =
         clientThatFailsWith(delegate, new HttpTransportResponseException(401, "no token"));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.RETRY, client.emit(event()));
     verify(delegate, times(1)).emit(any(RunEvent.class));
+    assertTrue(client.lastError().startsWith("HTTP 401 from "), client.lastError());
   }
 
   @Test
@@ -98,7 +101,7 @@ class OpenLineageHttpClientTest {
     OpenLineageHttpClient client =
         clientThatFailsWith(delegate, new HttpTransportResponseException(503, "unavailable"));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.RETRY, client.emit(event()));
     // maxRetries = 3 -> 4 attempts in total.
     verify(delegate, times(4)).emit(any(RunEvent.class));
   }
@@ -109,7 +112,7 @@ class OpenLineageHttpClientTest {
     OpenLineageHttpClient client =
         clientThatFailsWith(delegate, new HttpTransportResponseException(429, "slow down"));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.RETRY, client.emit(event()));
     verify(delegate, times(4)).emit(any(RunEvent.class));
   }
 
@@ -120,7 +123,7 @@ class OpenLineageHttpClientTest {
     OpenLineageHttpClient client =
         clientThatFailsWith(delegate, new OpenLineageClientException("connection refused"));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.RETRY, client.emit(event()));
     verify(delegate, times(4)).emit(any(RunEvent.class));
   }
 
@@ -134,7 +137,7 @@ class OpenLineageHttpClientTest {
             new OpenLineageClientException(
                 "emit failed", new HttpTransportResponseException(422, "unprocessable")));
 
-    assertFalse(client.emit(event()));
+    assertEquals(Result.REJECTED, client.emit(event()));
     verify(delegate, times(1)).emit(any(RunEvent.class));
   }
 
@@ -145,7 +148,7 @@ class OpenLineageHttpClientTest {
     OpenLineageHttpClient client =
         new OpenLineageHttpClient(delegate, COLLECTOR, 3, 1, new LogChannel("olhttp"));
 
-    assertTrue(client.emit(event()));
+    assertEquals(Result.SENT, client.emit(event()));
     assertEquals(1, client.getSuccessCount());
     assertEquals(0, client.getFailureCount());
     verify(delegate, times(1)).emit(any(RunEvent.class));

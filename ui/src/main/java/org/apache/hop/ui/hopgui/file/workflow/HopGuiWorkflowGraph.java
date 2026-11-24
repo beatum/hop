@@ -54,6 +54,8 @@ import org.apache.hop.core.file.IHasFilename;
 import org.apache.hop.core.gui.AreaOwner;
 import org.apache.hop.core.gui.CanvasSvgRenderResult;
 import org.apache.hop.core.gui.DPoint;
+import org.apache.hop.core.gui.HopLineShape;
+import org.apache.hop.core.gui.HopPath;
 import org.apache.hop.core.gui.IGc;
 import org.apache.hop.core.gui.IRedrawable;
 import org.apache.hop.core.gui.IUndo;
@@ -233,6 +235,14 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
         IWebCanvasGraph,
         IGraphPaletteHost,
         ISnapshotUndoSupport {
+  private static final String CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_TITLE =
+      "HopGuiWorkflowGraph.Dialog.SplitHop.Title";
+  private static final String CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_MESSAGE =
+      "HopGuiWorkflowGraph.Dialog.SplitHop.Message";
+  private static final String CONST_SYSTEM_BUTTON_YES = "System.Button.Yes";
+  private static final String CONST_SYSTEM_BUTTON_NO = "System.Button.No";
+  private static final String CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_OPTION_SPLIT_HOP =
+      "HopGuiWorkflowGraph.Dialog.Option.SplitHop.DoNotAskAgain";
 
   private static final Class<?> PKG = HopGuiWorkflowGraph.class;
 
@@ -383,11 +393,11 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
 
   @Getter private Object canvasZoomHandler; // For web/RAP zoom handling
 
-  private SashForm paletteSash;
+  private final SashForm paletteSash;
 
-  private GraphPaletteTree paletteTree;
+  private final GraphPaletteTree paletteTree;
 
-  private SashForm sashForm;
+  private final SashForm sashForm;
 
   public CTabFolder extraViewTabFolder;
 
@@ -413,12 +423,12 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
   public HopGuiWorkflowHopDelegate workflowHopDelegate;
   public HopGuiNotePadDelegate notePadDelegate;
 
-  private Composite mainComposite;
+  private final Composite mainComposite;
 
   private ToolItem rotateItem;
   private ToolItem minMaxItem;
 
-  private List<AreaOwner> areaOwners;
+  private final List<AreaOwner> areaOwners;
 
   @Setter private HopWorkflowFileType<WorkflowMeta> fileType;
 
@@ -1276,17 +1286,19 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
             MessageDialogWithToggle md =
                 new MessageDialogWithToggle(
                     hopShell(),
-                    BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Title"),
-                    BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Message")
+                    BaseMessages.getString(
+                        PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_TITLE),
+                    BaseMessages.getString(
+                            PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_MESSAGE)
                         + Const.CR
                         + hop,
                     SWT.ICON_QUESTION,
                     new String[] {
-                      BaseMessages.getString(PKG, "System.Button.Yes"),
-                      BaseMessages.getString(PKG, "System.Button.No")
+                      BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_YES),
+                      BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_NO)
                     },
                     BaseMessages.getString(
-                        PKG, "HopGuiWorkflowGraph.Dialog.Option.SplitHop.DoNotAskAgain"),
+                        PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_OPTION_SPLIT_HOP),
                     hopGui.getProps().getAutoSplit());
             id = md.open();
             hopGui.getProps().setAutoSplit(md.getToggleState());
@@ -1817,17 +1829,16 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
         MessageDialogWithToggle md =
             new MessageDialogWithToggle(
                 hopShell(),
-                BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Title"),
-                BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Message")
+                BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_TITLE),
+                BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_MESSAGE)
                     + Const.CR
                     + hop,
                 SWT.ICON_QUESTION,
                 new String[] {
-                  BaseMessages.getString(PKG, "System.Button.Yes"),
-                  BaseMessages.getString(PKG, "System.Button.No")
+                  BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_YES),
+                  BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_NO)
                 },
-                BaseMessages.getString(
-                    PKG, "HopGuiWorkflowGraph.Dialog.Option.SplitHop.DoNotAskAgain"),
+                BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_OPTION_SPLIT_HOP),
                 hopGui.getProps().getAutoSplit());
         id = md.open();
         hopGui.getProps().setAutoSplit(md.getToggleState());
@@ -2106,17 +2117,16 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
           MessageDialogWithToggle md =
               new MessageDialogWithToggle(
                   hopShell(),
-                  BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Title"),
-                  BaseMessages.getString(PKG, "HopGuiWorkflowGraph.Dialog.SplitHop.Message")
+                  BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_TITLE),
+                  BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_SPLIT_HOP_MESSAGE)
                       + Const.CR
                       + hop,
                   SWT.ICON_QUESTION,
                   new String[] {
-                    BaseMessages.getString(PKG, "System.Button.Yes"),
-                    BaseMessages.getString(PKG, "System.Button.No")
+                    BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_YES),
+                    BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_NO)
                   },
-                  BaseMessages.getString(
-                      PKG, "HopGuiWorkflowGraph.Dialog.Option.SplitHop.DoNotAskAgain"),
+                  BaseMessages.getString(PKG, CONST_HOP_GUI_WORKFLOW_GRAPH_DIALOG_OPTION_SPLIT_HOP),
                   hopGui.getProps().getAutoSplit());
           id = md.open();
           hopGui.getProps().setAutoSplit(md.getToggleState());
@@ -2881,8 +2891,8 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
       MessageBox mb = new MessageBox(hopShell(), SWT.YES | SWT.ICON_ERROR);
       mb.setMessage(
           BaseMessages.getString(
-              PKG, "PipelineGraph.Dialog.InvalidZoomMeasurement.Message", zoomLabel.getText()));
-      mb.setText(BaseMessages.getString(PKG, "PipelineGraph.Dialog.InvalidZoomMeasurement.Title"));
+              PKG, "WorkflowGraph.Dialog.InvalidZoomMeasurement.Message", zoomLabel.getText()));
+      mb.setText(BaseMessages.getString(PKG, "WorkflowGraph.Dialog.InvalidZoomMeasurement.Title"));
       mb.open();
     }
 
@@ -4264,8 +4274,7 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
 
     // Do double buffering to prevent flickering on Windows
     //
-    boolean needsDoubleBuffering =
-        Const.isWindows() && "GUI".equalsIgnoreCase(Const.getHopPlatformRuntime());
+    boolean needsDoubleBuffering = Const.isWindows() && Const.isGuiRuntime();
 
     Image image = null;
     GC swtGc = e.gc;
@@ -4528,6 +4537,10 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
   }
 
   protected boolean pointOnLine(int x, int y, int[] line) {
+    if (HopLineShape.getConfigured() == HopLineShape.CURVED) {
+      HopPath path = HopPath.curved(line[0], line[1], line[2], line[3], iconSize, true, true);
+      return path.distanceTo(x, y) <= HOP_SEL_MARGIN / 2.0 + 1;
+    }
     int dx;
     int dy;
     int pm = HOP_SEL_MARGIN / 2;
@@ -4763,6 +4776,14 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
     hopDisplay()
         .asyncExec(
             () -> {
+              // The checks above can go stale: this runnable also runs during Display.dispose().
+              if (!isUiAlive()
+                  || toolBarWidgets == null
+                  || toolBar == null
+                  || toolBar.isDisposed()) {
+                return;
+              }
+
               setZoomLabel();
 
               // Enable/disable the undo/redo toolbar buttons...
@@ -5668,8 +5689,8 @@ public class HopGuiWorkflowGraph extends HopGuiAbstractGraph
                     + Const.CR,
                 SWT.ICON_QUESTION,
                 new String[] {
-                  BaseMessages.getString(PKG, "System.Button.Yes"),
-                  BaseMessages.getString(PKG, "System.Button.No")
+                  BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_YES),
+                  BaseMessages.getString(PKG, CONST_SYSTEM_BUTTON_NO)
                 },
                 BaseMessages.getString(PKG, "WorkflowLog.Dialog.SaveChangedFile.Toggle"),
                 hopGui.getProps().getAutoSave());
